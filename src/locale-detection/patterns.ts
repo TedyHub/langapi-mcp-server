@@ -1,0 +1,146 @@
+/**
+ * Framework-specific patterns for detecting i18n locale files
+ */
+
+export interface FrameworkPattern {
+  /** Config files that identify this framework */
+  configFiles: string[];
+  /** Glob patterns for locale files */
+  localeGlobs: string[];
+  /** Regex pattern to identify framework in config content */
+  configPattern?: RegExp;
+}
+
+export const FRAMEWORK_PATTERNS: Record<string, FrameworkPattern> = {
+  "next-intl": {
+    configFiles: [
+      "next.config.js",
+      "next.config.mjs",
+      "next.config.ts",
+      "i18n.ts",
+      "i18n.js",
+      "src/i18n.ts",
+      "src/i18n.js",
+    ],
+    localeGlobs: [
+      "messages/*.json",
+      "messages/*/*.json",
+      "locales/*.json",
+      "locales/*/*.json",
+      "src/messages/*.json",
+      "src/locales/*.json",
+    ],
+    configPattern: /next-intl|createNextIntlPlugin|NextIntlClientProvider/,
+  },
+  i18next: {
+    configFiles: [
+      "i18n.js",
+      "i18n.ts",
+      "i18next.config.js",
+      "i18next.config.ts",
+      "next-i18next.config.js",
+      "src/i18n/index.ts",
+      "src/i18n/index.js",
+    ],
+    localeGlobs: [
+      "public/locales/*/*.json",
+      "locales/*/*.json",
+      "src/locales/*/*.json",
+      "translations/*/*.json",
+    ],
+    configPattern: /i18next|next-i18next|react-i18next/,
+  },
+  "react-intl": {
+    configFiles: ["src/i18n/index.ts", "src/i18n/index.js", "src/i18n.ts"],
+    localeGlobs: [
+      "src/lang/*.json",
+      "src/locales/*.json",
+      "lang/*.json",
+      "compiled-lang/*.json",
+    ],
+    configPattern: /react-intl|IntlProvider|formatMessage/,
+  },
+  generic: {
+    configFiles: [],
+    localeGlobs: [
+      "locales/*.json",
+      "translations/*.json",
+      "i18n/*.json",
+      "lang/*.json",
+      "messages/*.json",
+      "src/locales/*.json",
+      "src/translations/*.json",
+      "src/i18n/*.json",
+      "public/locales/*.json",
+    ],
+  },
+};
+
+/**
+ * Common language codes
+ */
+export const COMMON_LANGUAGE_CODES = [
+  "en",
+  "de",
+  "fr",
+  "es",
+  "it",
+  "pt",
+  "nl",
+  "pl",
+  "ru",
+  "ja",
+  "ko",
+  "zh",
+  "ar",
+  "hi",
+  "tr",
+  "sv",
+  "da",
+  "no",
+  "fi",
+  "cs",
+  "hu",
+  "ro",
+  "bg",
+  "uk",
+  "he",
+  "th",
+  "vi",
+  "id",
+  "ms",
+  "el",
+  "sk",
+  "hr",
+  "sl",
+  "lt",
+  "lv",
+  "et",
+  // With regions
+  "en-US",
+  "en-GB",
+  "en-AU",
+  "pt-BR",
+  "pt-PT",
+  "zh-CN",
+  "zh-TW",
+  "es-ES",
+  "es-MX",
+  "fr-FR",
+  "fr-CA",
+  "de-DE",
+  "de-AT",
+  "de-CH",
+];
+
+/**
+ * Check if a string looks like a language code
+ */
+export function isLikelyLanguageCode(str: string): boolean {
+  // Check exact match first
+  if (COMMON_LANGUAGE_CODES.includes(str)) {
+    return true;
+  }
+  // Check pattern: 2 lowercase letters, optionally followed by - and more
+  return /^[a-z]{2}(-[A-Z]{2})?$/.test(str);
+}
