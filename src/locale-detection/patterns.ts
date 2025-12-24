@@ -71,6 +71,8 @@ export const FRAMEWORK_PATTERNS: Record<string, FrameworkPattern> = {
       "src/locales/*.json",
       "src/translations/*.json",
       "src/i18n/*.json",
+      "src/lang/*.json",
+      "src/messages/*.json",
       "public/locales/*.json",
     ],
   },
