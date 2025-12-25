@@ -48,7 +48,6 @@ export async function readSyncCache(
   sourceLang: string
 ): Promise<Record<string, string> | null> {
   const cachePath = getCachePath(projectPath);
-  console.error(`[SYNC-CACHE] Reading cache from: ${cachePath}`);
 
   try {
     const content = await readFile(cachePath, "utf-8");
@@ -56,14 +55,11 @@ export async function readSyncCache(
 
     // Only return cache if source language matches
     if (cache.sourceLang === sourceLang) {
-      console.error(`[SYNC-CACHE] Cache found with ${Object.keys(cache.content).length} keys`);
       return cache.content;
     }
-    console.error(`[SYNC-CACHE] Cache lang mismatch: ${cache.sourceLang} vs ${sourceLang}`);
     return null;
-  } catch (err) {
+  } catch {
     // Cache doesn't exist or is invalid
-    console.error(`[SYNC-CACHE] Cache not found or invalid: ${err}`);
     return null;
   }
 }
@@ -77,31 +73,23 @@ export async function writeSyncCache(
   content: KeyValue[]
 ): Promise<void> {
   const cachePath = getCachePath(projectPath);
-  console.error(`[SYNC-CACHE] Writing cache to: ${cachePath}`);
 
-  try {
-    // Ensure cache directory exists
-    await mkdir(dirname(cachePath), { recursive: true });
-    console.error(`[SYNC-CACHE] Directory ensured: ${dirname(cachePath)}`);
+  // Ensure cache directory exists
+  await mkdir(dirname(cachePath), { recursive: true });
 
-    // Convert KeyValue array to map
-    const contentMap: Record<string, string> = {};
-    for (const item of content) {
-      contentMap[item.key] = item.value;
-    }
-
-    const cache: SyncCache = {
-      sourceLang,
-      content: contentMap,
-      lastSync: new Date().toISOString(),
-    };
-
-    await writeFile(cachePath, JSON.stringify(cache, null, 2), "utf-8");
-    console.error(`[SYNC-CACHE] Cache written successfully with ${content.length} keys`);
-  } catch (err) {
-    console.error(`[SYNC-CACHE] Error writing cache: ${err}`);
-    throw err;
+  // Convert KeyValue array to map
+  const contentMap: Record<string, string> = {};
+  for (const item of content) {
+    contentMap[item.key] = item.value;
   }
+
+  const cache: SyncCache = {
+    sourceLang,
+    content: contentMap,
+    lastSync: new Date().toISOString(),
+  };
+
+  await writeFile(cachePath, JSON.stringify(cache, null, 2), "utf-8");
 }
 
 /**

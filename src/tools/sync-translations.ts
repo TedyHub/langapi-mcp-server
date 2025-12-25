@@ -7,7 +7,7 @@ import { z } from "zod";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { dirname, join, resolve } from "path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { detectLocales } from "../locale-detection/index.js";
+import { detectLocales, type LocaleFile } from "../locale-detection/index.js";
 import {
   flattenJson,
   unflattenJson,
@@ -203,7 +203,6 @@ function removeExtraKeys(
     return targetObj;
   }
 
-  console.error(`[SYNC] Removing extra keys not in source: ${extraKeys.join(", ")}`);
   return removeKeysFromObject(targetObj, extraKeys);
 }
 
@@ -254,31 +253,45 @@ export function registerSyncTranslations(server: McpServer): void {
         };
       }
 
-      // Read source files and merge content
-      const sourceContent: Record<string, unknown> = {};
-      let sourceFormat: JsonFormat = { indent: "  ", trailingNewline: true };
+      // Track content per source file for namespace preservation
+      interface SourceFileData {
+        file: LocaleFile;
+        content: Record<string, unknown>;
+        flatContent: Array<{ key: string; value: string }>;
+        format: JsonFormat;
+      }
+
+      const sourceFilesData: SourceFileData[] = [];
 
       for (const file of sourceLocale.files) {
         const content = await readFile(file.path, "utf-8");
         const parsed = parseJsonWithFormat(content);
         if (parsed) {
-          Object.assign(sourceContent, parsed.data);
-          sourceFormat = parsed.format; // Use last file's format
+          const flatContent = flattenJson(parsed.data as Record<string, unknown>);
+          sourceFilesData.push({
+            file,
+            content: parsed.data as Record<string, unknown>,
+            flatContent,
+            format: parsed.format,
+          });
         }
+      }
+
+      // Also create merged versions for backward compatibility with cache/delta logic
+      const sourceContent: Record<string, unknown> = {};
+      let sourceFormat: JsonFormat = { indent: "  ", trailingNewline: true };
+      for (const fileData of sourceFilesData) {
+        Object.assign(sourceContent, fileData.content);
+        sourceFormat = fileData.format;
       }
 
       // Flatten source content for API
       const flatContent = flattenJson(sourceContent);
       const sourceKeys = new Set(flatContent.map((item) => item.key));
-      console.error(`[SYNC] projectPath: ${projectPath}`);
-      console.error(`[SYNC] flatContent has ${flatContent.length} keys`);
 
       // Read cache and detect local delta
       const cachedContent = await readSyncCache(projectPath, input.source_lang);
-      console.error(`[SYNC] cachedContent: ${cachedContent ? Object.keys(cachedContent).length + ' keys' : 'null'}`);
-
       const localDelta = detectLocalDelta(flatContent, cachedContent);
-      console.error(`[SYNC] localDelta: ${localDelta.newKeys.length} new, ${localDelta.changedKeys.length} changed, ${localDelta.unchangedKeys.length} unchanged`);
 
       // Detect missing target languages (files that don't exist yet)
       const missingLanguages: string[] = [];
@@ -291,33 +304,66 @@ export function registerSyncTranslations(server: McpServer): void {
           existingLanguages.push(targetLang);
         }
       }
-      console.error(`[SYNC] Missing languages: ${missingLanguages.join(", ") || "none"}`);
-      console.error(`[SYNC] Existing languages: ${existingLanguages.join(", ") || "none"}`);
 
-      // If no content to sync AND no missing languages, return early with accurate delta
-      if (localDelta.contentToSync.length === 0 && missingLanguages.length === 0) {
+      // Detect missing target FILES (not just languages)
+      // A language may exist but be missing some namespace files
+      const languagesWithMissingFiles: string[] = [];
+
+      for (const targetLang of existingLanguages) {
+        for (const sourceFileData of sourceFilesData) {
+          // Compute expected target file path
+          const targetFilePath = sourceFileData.file.path.replace(
+            `/${input.source_lang}/`,
+            `/${targetLang}/`
+          );
+
+          // Check if file exists
+          try {
+            await readFile(targetFilePath, "utf-8");
+          } catch {
+            // File doesn't exist - this language has missing files
+            if (!languagesWithMissingFiles.includes(targetLang)) {
+              languagesWithMissingFiles.push(targetLang);
+            }
+          }
+        }
+      }
+
+      // If no content to sync AND no missing languages AND no missing files, return early
+      if (localDelta.contentToSync.length === 0 && missingLanguages.length === 0 && languagesWithMissingFiles.length === 0) {
         if (input.dry_run) {
           // Check for extra keys in target files even in dry_run mode
           let totalExtraKeys = 0;
           const extraKeysByLang: Record<string, string[]> = {};
 
           for (const targetLang of input.target_langs) {
-            const targetLocale = detection.locales.find((l) => l.lang === targetLang);
-            if (!targetLocale || targetLocale.files.length === 0) continue;
+            const langExtraKeys: string[] = [];
 
-            try {
-              const content = await readFile(targetLocale.files[0].path, "utf-8");
-              const parsed = parseJsonSafe(content);
-              if (parsed) {
-                const targetFlat = flattenJson(parsed as Record<string, unknown>);
-                const extraKeys = targetFlat.filter((t) => !sourceKeys.has(t.key)).map((t) => t.key);
-                if (extraKeys.length > 0) {
-                  extraKeysByLang[targetLang] = extraKeys;
-                  totalExtraKeys += extraKeys.length;
+            // Check each source file's corresponding target file
+            for (const sourceFileData of sourceFilesData) {
+              const targetFilePath = sourceFileData.file.path.replace(
+                `/${input.source_lang}/`,
+                `/${targetLang}/`
+              );
+
+              const sourceFileKeys = new Set(sourceFileData.flatContent.map((item) => item.key));
+
+              try {
+                const content = await readFile(targetFilePath, "utf-8");
+                const parsed = parseJsonSafe(content);
+                if (parsed) {
+                  const targetFlat = flattenJson(parsed as Record<string, unknown>);
+                  const extraKeys = targetFlat.filter((t) => !sourceFileKeys.has(t.key)).map((t) => t.key);
+                  langExtraKeys.push(...extraKeys);
                 }
+              } catch {
+                // File doesn't exist or can't be read
               }
-            } catch {
-              // File doesn't exist or can't be read
+            }
+
+            if (langExtraKeys.length > 0) {
+              extraKeysByLang[targetLang] = langExtraKeys;
+              totalExtraKeys += langExtraKeys.length;
             }
           }
 
@@ -353,40 +399,55 @@ export function registerSyncTranslations(server: McpServer): void {
 
         if (input.write_to_files) {
           for (const targetLang of input.target_langs) {
-            const targetLocale = detection.locales.find((l) => l.lang === targetLang);
-            if (!targetLocale || targetLocale.files.length === 0) {
-              results.push({ language: targetLang, translated_count: 0, file_written: null });
-              continue;
-            }
+            const filesWritten: string[] = [];
+            let totalKeysRemovedForLang = 0;
 
-            const filePath = targetLocale.files[0].path;
-            const resolvedPath = resolve(filePath);
+            // Process each source file's corresponding target file
+            for (const sourceFileData of sourceFilesData) {
+              // Compute target file path by replacing source lang with target lang
+              const targetFilePath = sourceFileData.file.path.replace(
+                `/${input.source_lang}/`,
+                `/${targetLang}/`
+              );
 
-            try {
-              const existingContent = await readFile(resolvedPath, "utf-8");
-              const parsed = parseJsonSafe(existingContent);
-              if (!parsed) {
-                results.push({ language: targetLang, translated_count: 0, file_written: null });
+              const resolvedPath = resolve(targetFilePath);
+              if (!isPathWithinProject(resolvedPath, projectPath)) {
                 continue;
               }
 
-              // Check for and remove extra keys
-              const cleaned = removeExtraKeys(parsed as Record<string, unknown>, sourceKeys);
-              const cleanedStr = stringifyWithFormat(cleaned, sourceFormat);
-              const originalStr = stringifyWithFormat(parsed as Record<string, unknown>, sourceFormat);
+              // Get the keys that belong to this source file
+              const sourceFileKeys = new Set(sourceFileData.flatContent.map((item) => item.key));
 
-              if (cleanedStr !== originalStr) {
-                // Extra keys were removed, write the cleaned file
-                await writeFile(resolvedPath, cleanedStr, "utf-8");
-                const keysRemoved = flattenJson(parsed as Record<string, unknown>).length - flattenJson(cleaned).length;
-                console.error(`[SYNC] Removed ${keysRemoved} extra keys from ${targetLang}`);
-                results.push({ language: targetLang, translated_count: 0, file_written: resolvedPath, keys_removed: keysRemoved });
-              } else {
-                results.push({ language: targetLang, translated_count: 0, file_written: null });
+              try {
+                const existingContent = await readFile(resolvedPath, "utf-8");
+                const parsed = parseJsonSafe(existingContent);
+                if (!parsed) {
+                  continue;
+                }
+
+                // Check for and remove extra keys
+                const cleaned = removeExtraKeys(parsed as Record<string, unknown>, sourceFileKeys);
+                const cleanedStr = stringifyWithFormat(cleaned, sourceFileData.format);
+                const originalStr = stringifyWithFormat(parsed as Record<string, unknown>, sourceFileData.format);
+
+                if (cleanedStr !== originalStr) {
+                  // Extra keys were removed, write the cleaned file
+                  await writeFile(resolvedPath, cleanedStr, "utf-8");
+                  const keysRemoved = flattenJson(parsed as Record<string, unknown>).length - flattenJson(cleaned).length;
+                  filesWritten.push(resolvedPath);
+                  totalKeysRemovedForLang += keysRemoved;
+                }
+              } catch {
+                // File doesn't exist or can't be read
               }
-            } catch {
-              results.push({ language: targetLang, translated_count: 0, file_written: null });
             }
+
+            results.push({
+              language: targetLang,
+              translated_count: 0,
+              file_written: filesWritten.length > 0 ? filesWritten.join(", ") : null,
+              keys_removed: totalKeysRemovedForLang > 0 ? totalKeysRemovedForLang : undefined,
+            });
           }
         } else {
           for (const targetLang of input.target_langs) {
@@ -430,8 +491,9 @@ export function registerSyncTranslations(server: McpServer): void {
       const hasSkipKeys = input.skip_keys && Object.keys(input.skip_keys).length > 0;
       const hasMissingLanguages = missingLanguages.length > 0;
 
-      // If we have missing languages OR skip_keys, process per-language
-      if (hasMissingLanguages || hasSkipKeys) {
+      // If we have missing languages, missing files, OR skip_keys, process per-language
+      const hasLanguagesWithMissingFiles = languagesWithMissingFiles.length > 0;
+      if (hasMissingLanguages || hasSkipKeys || hasLanguagesWithMissingFiles) {
         // Call API per language with filtered content
         let totalCreditsRequired = 0;
         let totalWordsToTranslate = 0;
@@ -439,9 +501,11 @@ export function registerSyncTranslations(server: McpServer): void {
         const allResults: Array<{ language: string; translatedCount: number; translations: Array<{ key: string; value: string }> }> = [];
 
         for (const targetLang of input.target_langs) {
-          // Determine base content: ALL keys for missing languages, only changes for existing
+          // Determine base content: ALL keys for missing languages or languages with missing files
           const isMissingLang = missingLanguages.includes(targetLang);
-          const baseContent = isMissingLang ? flatContent : localDelta.contentToSync;
+          const hasMissingFiles = languagesWithMissingFiles.includes(targetLang);
+          const needsFullSync = isMissingLang || hasMissingFiles;
+          const baseContent = needsFullSync ? flatContent : localDelta.contentToSync;
 
           // Apply skip_keys filter on top of base content
           const skipSet = getSkipKeysForLang(input.skip_keys, targetLang);
@@ -464,9 +528,6 @@ export function registerSyncTranslations(server: McpServer): void {
             allResults.push({ language: targetLang, translatedCount: 0, translations: [] });
             continue;
           }
-
-          console.error(`[SYNC] Translating ${filteredContent.length} keys for ${targetLang} (${isMissingLang ? 'new language' : 'existing language'})`);
-
 
           const response = await client.sync({
             source_lang: input.source_lang,
@@ -553,60 +614,66 @@ export function registerSyncTranslations(server: McpServer): void {
           if (input.write_to_files) {
             for (const result of response.results) {
               const lang = result.language;
+              const filesWritten: string[] = [];
 
-              // Find existing target locale to match directory structure
-              const targetLocale = detection.locales.find((l) => l.lang === lang);
+              // Write to each source file's corresponding target file
+              for (const sourceFileData of sourceFilesData) {
+                // Compute target file path by replacing source lang with target lang
+                const targetFilePath = sourceFileData.file.path.replace(
+                  `/${input.source_lang}/`,
+                  `/${lang}/`
+                );
 
-              let filePath: string;
-              if (targetLocale && targetLocale.files.length > 0) {
-                filePath = targetLocale.files[0].path;
-              } else {
-                const sourceFile = sourceLocale.files[0];
-                filePath = sourceFile.path.replace(`/${input.source_lang}`, `/${lang}`);
-                filePath = filePath.replace(`${input.source_lang}.json`, `${lang}.json`);
-              }
-
-              const resolvedPath = resolve(filePath);
-              if (!isPathWithinProject(resolvedPath, projectPath)) {
-                results.push({
-                  language: lang,
-                  translated_count: result.translatedCount,
-                  skipped_keys: skippedKeysReport[lang],
-                  file_written: null,
-                });
-                continue;
-              }
-
-              // Read existing target file content (if exists)
-              let existingContent: Record<string, unknown> = {};
-              try {
-                const existingFileContent = await readFile(resolvedPath, "utf-8");
-                const parsed = parseJsonSafe(existingFileContent);
-                if (parsed) {
-                  existingContent = parsed as Record<string, unknown>;
+                const resolvedPath = resolve(targetFilePath);
+                if (!isPathWithinProject(resolvedPath, projectPath)) {
+                  continue;
                 }
-              } catch {
-                // File doesn't exist yet, start with empty object
+
+                // Get the keys that belong to this source file
+                const sourceFileKeys = new Set(sourceFileData.flatContent.map((item) => item.key));
+
+                // Filter translations to only those from this source file
+                const fileTranslations = result.translations.filter(
+                  (t) => sourceFileKeys.has(t.key)
+                );
+
+                if (fileTranslations.length === 0) {
+                  continue;
+                }
+
+                // Read existing target file content (if exists)
+                let existingContent: Record<string, unknown> = {};
+                try {
+                  const existingFileContent = await readFile(resolvedPath, "utf-8");
+                  const parsed = parseJsonSafe(existingFileContent);
+                  if (parsed) {
+                    existingContent = parsed as Record<string, unknown>;
+                  }
+                } catch {
+                  // File doesn't exist yet, start with empty object
+                }
+
+                // Unflatten the new translations
+                const newTranslations = unflattenJson(fileTranslations);
+
+                // Deep merge: new translations override existing ones
+                let mergedContent = deepMerge(existingContent, newTranslations);
+
+                // Remove any keys in target that don't exist in this source file
+                mergedContent = removeExtraKeys(mergedContent, sourceFileKeys);
+
+                await mkdir(dirname(resolvedPath), { recursive: true });
+                const fileContent = stringifyWithFormat(mergedContent, sourceFileData.format);
+                await writeFile(resolvedPath, fileContent, "utf-8");
+
+                filesWritten.push(resolvedPath);
               }
-
-              // Unflatten the new translations
-              const newTranslations = unflattenJson(result.translations);
-
-              // Deep merge: new translations override existing ones
-              let mergedContent = deepMerge(existingContent, newTranslations);
-
-              // Remove any keys in target that don't exist in source
-              mergedContent = removeExtraKeys(mergedContent, sourceKeys);
-
-              await mkdir(dirname(resolvedPath), { recursive: true });
-              const fileContent = stringifyWithFormat(mergedContent, sourceFormat);
-              await writeFile(resolvedPath, fileContent, "utf-8");
 
               results.push({
                 language: lang,
                 translated_count: result.translatedCount,
                 skipped_keys: skippedKeysReport[lang],
-                file_written: resolvedPath,
+                file_written: filesWritten.length > 0 ? filesWritten.join(", ") : null,
               });
             }
           } else {
@@ -701,70 +768,68 @@ export function registerSyncTranslations(server: McpServer): void {
         if (input.write_to_files) {
           for (const result of response.results) {
             const lang = result.language;
+            const filesWritten: string[] = [];
 
-            // Find existing target locale to match directory structure
-            const targetLocale = detection.locales.find((l) => l.lang === lang);
-
-            let filePath: string;
-            if (targetLocale && targetLocale.files.length > 0) {
-              // Use existing file path
-              filePath = targetLocale.files[0].path;
-            } else {
-              // Create new file based on source structure
-              const sourceFile = sourceLocale.files[0];
-              filePath = sourceFile.path.replace(
-                `/${input.source_lang}`,
-                `/${lang}`
+            // Write to each source file's corresponding target file
+            for (const sourceFileData of sourceFilesData) {
+              // Compute target file path by replacing source lang with target lang
+              const targetFilePath = sourceFileData.file.path.replace(
+                `/${input.source_lang}/`,
+                `/${lang}/`
               );
-              filePath = filePath.replace(
-                `${input.source_lang}.json`,
-                `${lang}.json`
-              );
-            }
 
-            // Validate path is within project directory (prevent path traversal)
-            const resolvedPath = resolve(filePath);
-            if (!isPathWithinProject(resolvedPath, projectPath)) {
-              results.push({
-                language: lang,
-                translated_count: result.translatedCount,
-                file_written: null, // Skipped: path outside project
-              });
-              continue;
-            }
-
-            // Read existing target file content (if exists)
-            let existingContent: Record<string, unknown> = {};
-            try {
-              const existingFileContent = await readFile(resolvedPath, "utf-8");
-              const parsed = parseJsonSafe(existingFileContent);
-              if (parsed) {
-                existingContent = parsed as Record<string, unknown>;
+              const resolvedPath = resolve(targetFilePath);
+              if (!isPathWithinProject(resolvedPath, projectPath)) {
+                continue;
               }
-            } catch {
-              // File doesn't exist yet, start with empty object
+
+              // Get the keys that belong to this source file
+              const sourceFileKeys = new Set(sourceFileData.flatContent.map((item) => item.key));
+
+              // Filter translations to only those from this source file
+              const fileTranslations = result.translations.filter(
+                (t) => sourceFileKeys.has(t.key)
+              );
+
+              if (fileTranslations.length === 0) {
+                continue;
+              }
+
+              // Read existing target file content (if exists)
+              let existingContent: Record<string, unknown> = {};
+              try {
+                const existingFileContent = await readFile(resolvedPath, "utf-8");
+                const parsed = parseJsonSafe(existingFileContent);
+                if (parsed) {
+                  existingContent = parsed as Record<string, unknown>;
+                }
+              } catch {
+                // File doesn't exist yet, start with empty object
+              }
+
+              // Unflatten the new translations
+              const newTranslations = unflattenJson(fileTranslations);
+
+              // Deep merge: new translations override existing ones
+              let mergedContent = deepMerge(existingContent, newTranslations);
+
+              // Remove any keys in target that don't exist in this source file
+              mergedContent = removeExtraKeys(mergedContent, sourceFileKeys);
+
+              // Ensure directory exists
+              await mkdir(dirname(resolvedPath), { recursive: true });
+
+              // Write file with format preservation
+              const fileContent = stringifyWithFormat(mergedContent, sourceFileData.format);
+              await writeFile(resolvedPath, fileContent, "utf-8");
+
+              filesWritten.push(resolvedPath);
             }
-
-            // Unflatten the new translations
-            const newTranslations = unflattenJson(result.translations);
-
-            // Deep merge: new translations override existing ones
-            let mergedContent = deepMerge(existingContent, newTranslations);
-
-            // Remove any keys in target that don't exist in source
-            mergedContent = removeExtraKeys(mergedContent, sourceKeys);
-
-            // Ensure directory exists
-            await mkdir(dirname(resolvedPath), { recursive: true });
-
-            // Write file with format preservation
-            const fileContent = stringifyWithFormat(mergedContent, sourceFormat);
-            await writeFile(resolvedPath, fileContent, "utf-8");
 
             results.push({
               language: lang,
               translated_count: result.translatedCount,
-              file_written: resolvedPath,
+              file_written: filesWritten.length > 0 ? filesWritten.join(", ") : null,
             });
           }
         } else {
