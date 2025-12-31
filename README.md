@@ -7,7 +7,7 @@ This package enables AI assistants like Claude, Cursor, and VS Code extensions t
 ## Quick Start
 
 ```bash
-# 1. Get your API key at https://langapi.io (2,000 free credits)
+# 1. Get your API key at https://langapi.io (1,000 free credits)
 
 # 2. Add to your AI tool (example for Claude Desktop on macOS):
 # Edit ~/Library/Application Support/Claude/claude_desktop_config.json
@@ -291,8 +291,8 @@ Compare source locale against targets to identify missing keys and estimate cost
   "cost_estimate": {
     "words_to_translate": 45,
     "credits_required": 90,
-    "current_balance": 2000,
-    "balance_after_sync": 1910
+    "current_balance": 1000,
+    "balance_after_sync": 910
   }
 }
 ```
@@ -326,8 +326,8 @@ Sync translations via the LangAPI API. **Default is dry_run=true for safety.**
   "cost": {
     "words_to_translate": 45,
     "credits_required": 90,
-    "current_balance": 2000,
-    "balance_after_sync": 1910
+    "current_balance": 1000,
+    "balance_after_sync": 910
   },
   "message": "Preview: 2 keys to sync, 90 credits required. Run with dry_run=false to execute."
 }
@@ -448,7 +448,7 @@ I found a next-intl project with English (150 keys) and German (120 keys) transl
 You: What translations are missing for German?
 
 Claude: [Calls get_translation_status]
-German is missing 30 keys. The sync would cost 85 credits (you have 2000 credits).
+German is missing 30 keys. The sync would cost 85 credits (you have 1000 credits).
 
 You: Sync the German translations
 
@@ -539,7 +539,7 @@ For self-hosted or enterprise deployments:
 
 LangAPI uses a credit-based billing system:
 - **1 credit = 1 word** to translate
-- New users get **2,000 free credits**
+- New users get **1,000 free credits**
 - Top up with **100,000 credits for $15** (no subscription, no expiry)
 
 Get your API key at [langapi.io](https://langapi.io).
