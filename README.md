@@ -72,7 +72,21 @@ After editing, **restart Claude Desktop** for changes to take effect.
 
 ### Claude Code (CLI)
 
-**Option 1: Project-level config** (recommended for teams)
+**Option 1: CLI command** (quickest)
+
+```bash
+# Add to current project (stored in .mcp.json)
+claude mcp add --transport stdio langapi \
+  --env LANGAPI_API_KEY=your-api-key-here \
+  -- npx @langapi/mcp-server
+
+# Or add globally for all projects (stored in ~/.claude.json)
+claude mcp add --transport stdio langapi --scope user \
+  --env LANGAPI_API_KEY=your-api-key-here \
+  -- npx @langapi/mcp-server
+```
+
+**Option 2: Project-level config** (recommended for teams)
 
 Create `.mcp.json` in your project root:
 
@@ -90,9 +104,9 @@ Create `.mcp.json` in your project root:
 }
 ```
 
-**Option 2: Global config**
+**Option 3: User-level config**
 
-Add to `~/.claude/settings.json`:
+Add to `~/.claude.json`:
 
 ```json
 {
@@ -108,13 +122,29 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
-**Option 3: Environment variable**
+**Option 4: Environment variable**
 
 ```bash
 export LANGAPI_API_KEY="your-api-key-here"
 ```
 
 Then the MCP server will pick it up automatically.
+
+**Verify connection:**
+
+```bash
+# List configured servers
+claude mcp list
+
+# Check server status inside Claude Code
+/mcp
+```
+
+**Remove server:**
+
+```bash
+claude mcp remove langapi
+```
 
 ---
 
