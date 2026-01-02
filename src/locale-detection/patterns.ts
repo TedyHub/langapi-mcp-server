@@ -46,6 +46,8 @@ export const FRAMEWORK_PATTERNS: Record<string, FrameworkPattern> = {
       "public/locales/*/*.json",
       "locales/*/*.json",
       "src/locales/*/*.json",
+      "src/i18n/locales/*.json",
+      "src/i18n/locales/*/*.json",
       "translations/*/*.json",
     ],
     configPattern: /i18next|next-i18next|react-i18next/,

@@ -176,50 +176,62 @@ export function registerGetTranslationStatus(server: McpServer): void {
         totalMissingKeys.push(...missing);
       }
 
-      // Estimate cost locally
+      // Estimate cost locally - calculate per-language to get accurate totals
       let costEstimate: CostEstimate | null = null;
 
-      // Calculate words to translate from source content
+      // Calculate words to translate by summing up per-language missing keys
+      // This is more accurate than multiplying unique missing keys by language count
       const flatSource = flattenJson(sourceContent);
-      const missingKeySet = new Set(totalMissingKeys);
-      const itemsToTranslate = flatSource.filter((item) =>
-        missingKeySet.has(item.key)
-      );
-      const wordsToTranslate = itemsToTranslate.reduce(
-        (sum, item) => sum + countWords(item.value),
-        0
-      );
+      const sourceKeyToWords = new Map<string, number>();
+      for (const item of flatSource) {
+        sourceKeyToWords.set(item.key, countWords(item.value));
+      }
 
-      // credits = words * number of target languages
-      const creditsRequired = wordsToTranslate * targetLangs.length;
+      // Sum words for all missing keys across all languages
+      let totalWordsToTranslate = 0;
+      for (const target of targets) {
+        for (const missingKey of target.keys.missing) {
+          const words = sourceKeyToWords.get(missingKey) || 0;
+          totalWordsToTranslate += words;
+        }
+      }
+
+      // credits = total words (already accounts for per-language)
+      const creditsRequired = totalWordsToTranslate;
 
       costEstimate = {
-        words_to_translate: wordsToTranslate,
+        words_to_translate: totalWordsToTranslate,
         credits_required: creditsRequired,
       };
 
-      // Get accurate estimate from server if API key is configured
+      // Get balance info from server if API key is configured
       if (LangAPIClient.canCreate()) {
         try {
           const client = LangAPIClient.create();
+          // Only send actually missing content to get accurate API estimate
+          const missingKeySet = new Set(totalMissingKeys);
+          const itemsToTranslate = flatSource.filter((item) =>
+            missingKeySet.has(item.key)
+          );
+
           const response = await client.sync({
             source_lang: input.source_lang,
             target_langs: targetLangs,
-            content: flatSource,
+            content: itemsToTranslate,
             dry_run: true,
           });
 
           if (response.success && "delta" in response) {
-            // This is a SyncDryRunResponse
+            // Use server's balance info, but keep our accurate local cost estimate
             costEstimate = {
-              words_to_translate: response.cost.wordsToTranslate,
-              credits_required: response.cost.creditsRequired,
+              words_to_translate: totalWordsToTranslate,
+              credits_required: creditsRequired,
               current_balance: response.cost.currentBalance,
-              balance_after_sync: response.cost.balanceAfterSync,
+              balance_after_sync: response.cost.currentBalance - creditsRequired,
             };
           }
         } catch {
-          // Fall back to local estimate
+          // Fall back to local estimate without balance info
         }
       }
 
