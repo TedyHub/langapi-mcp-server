@@ -34,7 +34,7 @@ import {
 // Input schema
 const SyncTranslationsSchema = z.object({
   source_lang: languageCodeSchema.describe("Source language code (e.g., 'en', 'pt-BR')"),
-  target_langs: languageCodesArraySchema.describe("Target language codes to sync"),
+  target_langs: languageCodesArraySchema.describe("Target language codes to translate to. Can include NEW languages not yet in the project (e.g., ['cs', 'de'] to add Czech and German)"),
   dry_run: z
     .boolean()
     .default(true)
@@ -261,7 +261,7 @@ function computeTargetFilePath(
 export function registerSyncTranslations(server: McpServer): void {
   server.tool(
     "sync_translations",
-    "Sync translations by calling the LangAPI /v1/sync endpoint. Default is dry_run=true (preview mode) for safety. Set dry_run=false to actually perform the sync.",
+    "Add new languages or sync existing translations via LangAPI. Use this tool to: (1) ADD translations for new languages like Czech, Spanish, French - creates new locale files automatically, (2) SYNC existing translations when source content changes. Supports any valid language code (e.g., 'cs' for Czech, 'de' for German). Default is dry_run=true for preview.",
     SyncTranslationsSchema.shape,
     async (args): Promise<{ content: Array<{ type: "text"; text: string }> }> => {
       const input = SyncTranslationsSchema.parse(args);
@@ -554,139 +554,177 @@ export function registerSyncTranslations(server: McpServer): void {
       // Track skipped keys per language for reporting
       const skippedKeysReport: Record<string, string[]> = {};
 
-      // Check if we need per-language filtering
-      const hasSkipKeys = input.skip_keys && Object.keys(input.skip_keys).length > 0;
-      const hasMissingLanguages = missingLanguages.length > 0;
+      // ========== PER-FILE PROCESSING APPROACH ==========
+      // Process each source file separately:
+      // 1. For each source file, determine which keys need syncing
+      // 2. Make one API call per file → all target languages
+      // 3. Write to corresponding target files
+      // This ensures correct file mapping without namespace matching bugs
 
-      // If we have missing languages, missing files, skip_keys, OR no cache, process per-language
-      // When cache is null, we need per-language processing to filter against existing target translations
-      const hasLanguagesWithMissingFiles = languagesWithMissingFiles.length > 0;
-      const needsTargetFiltering = !cachedContent && existingLanguages.length > 0;
-      if (hasMissingLanguages || hasSkipKeys || hasLanguagesWithMissingFiles || needsTargetFiltering) {
-        // Process each language one at a time: API call → write files → next language
-        // This ensures partial results are saved immediately and not lost on error
-        let totalCreditsUsed = 0;
-        let totalWordsToTranslate = 0;
-        let currentBalance = 0;
+      let totalCreditsUsed = 0;
+      let totalWordsToTranslate = 0;
+      let currentBalance = 0;
 
-        // Track completed languages and their results
-        const completedResults: Array<{
-          language: string;
-          translated_count: number;
-          skipped_keys?: string[];
-          file_written: string | null;
-        }> = [];
-        const completedLanguages: string[] = [];
-        const allFilesWritten: string[] = [];
+      // Track results per language (aggregated across files)
+      const langResults: Map<string, {
+        translated_count: number;
+        skipped_keys?: string[];
+        files_written: string[];
+      }> = new Map();
+
+      // Initialize results for all target languages
+      for (const lang of input.target_langs) {
+        langResults.set(lang, { translated_count: 0, files_written: [] });
+      }
+
+      // Track completed files for partial error reporting
+      const completedFiles: string[] = [];
+      const allFilesWritten: string[] = [];
+
+      // Process each source file
+      for (const sourceFileData of sourceFilesData) {
+        const sourceFileKeys = new Set(sourceFileData.flatContent.map((item) => item.key));
+
+        // Filter delta content to only keys in this source file
+        const fileKeysInDelta = localDelta.contentToSync.filter(
+          (item) => sourceFileKeys.has(item.key)
+        );
+
+        // Determine which languages need this file's translations
+        // and what content to sync per language
+        const langContentMap: Map<string, Array<{ key: string; value: string }>> = new Map();
 
         for (const targetLang of input.target_langs) {
-          // Determine base content: ALL keys for missing languages or languages with missing files
-          const isMissingLang = missingLanguages.includes(targetLang);
-          const hasMissingFiles = languagesWithMissingFiles.includes(targetLang);
-          const needsFullSync = isMissingLang || hasMissingFiles;
-          let baseContent = needsFullSync ? flatContent : localDelta.contentToSync;
-
-          // Filter against existing target translations (not just cache)
-          // This ensures we only sync keys that are actually missing from target files
-          // Only apply when cache is null - otherwise cache delta already handles new/changed correctly
-          if (!isMissingLang && !cachedContent) {
-            const targetLocale = detection.locales.find((l) => l.lang === targetLang);
-            if (targetLocale && targetLocale.files.length > 0) {
-              // Read all target files and collect existing keys
-              const existingTargetKeys = new Set<string>();
-              for (const targetFile of targetLocale.files) {
-                try {
-                  const targetContent = await readFile(targetFile.path, "utf-8");
-                  const parsed = parseJsonWithFormat(targetContent);
-                  if (parsed) {
-                    const flatTarget = flattenJson(parsed.data as Record<string, unknown>);
-                    for (const item of flatTarget) {
-                      // Only count as "existing" if it has a non-empty value
-                      if (item.value && item.value.trim() !== "") {
-                        existingTargetKeys.add(item.key);
-                      }
-                    }
-                  }
-                } catch {
-                  // File read failed, treat as missing
-                }
-              }
-              // Filter out keys that already exist in target
-              baseContent = baseContent.filter((item) => !existingTargetKeys.has(item.key));
-            }
-          }
-
-          // Apply skip_keys filter on top of base content
-          const skipSet = getSkipKeysForLang(input.skip_keys, targetLang);
-          const filteredContent = baseContent.filter(
-            (item) => !skipSet.has(item.key)
+          // Compute target file path
+          const targetFilePath = computeTargetFilePath(
+            sourceFileData.file.path,
+            input.source_lang,
+            targetLang
           );
 
-          // Track skipped keys for this language
-          if (skipSet.size > 0) {
-            const skippedInContent = baseContent
-              .filter((item) => skipSet.has(item.key))
-              .map((item) => item.key);
-            if (skippedInContent.length > 0) {
-              skippedKeysReport[targetLang] = skippedInContent;
-            }
-          }
-
-          // Skip API call if no content after filtering
-          if (filteredContent.length === 0) {
-            completedResults.push({
-              language: targetLang,
-              translated_count: 0,
-              skipped_keys: skippedKeysReport[targetLang],
-              file_written: null,
-            });
-            completedLanguages.push(targetLang);
+          if (!targetFilePath || targetFilePath === sourceFileData.file.path) {
             continue;
           }
 
-          // Make API call for this language
-          const response = await client.sync({
-            source_lang: input.source_lang,
-            target_langs: [targetLang],
-            content: filteredContent,
-            dry_run: input.dry_run,
-          });
+          const resolvedPath = resolve(targetFilePath);
+          if (!isPathWithinProject(resolvedPath, projectPath)) {
+            continue;
+          }
 
-          // Handle API error - return immediately (previous languages already saved)
-          if (!response.success) {
-            const currentIndex = input.target_langs.indexOf(targetLang);
-            const remainingLangs = input.target_langs.slice(currentIndex + 1);
+          // Determine base content for this file+language combination
+          const isMissingLang = missingLanguages.includes(targetLang);
 
-            // Return partial error with info about completed languages
-            if (completedLanguages.length > 0) {
-              const output: SyncPartialErrorOutput = {
-                success: false,
-                partial_results: {
-                  languages_completed: completedLanguages,
-                  files_written: allFilesWritten,
-                  credits_used: totalCreditsUsed,
-                },
-                error: {
-                  code: response.error.code,
-                  message: response.error.message,
-                  failed_language: targetLang,
-                  remaining_languages: remainingLangs,
-                  current_balance: response.error.currentBalance,
-                  required_credits: response.error.requiredCredits,
-                  top_up_url: response.error.topUpUrl,
-                },
-              };
-              return {
-                content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
-              };
+          // Check if this specific target file exists
+          let targetFileExists = false;
+          let existingTargetKeys = new Set<string>();
+          try {
+            const targetContent = await readFile(resolvedPath, "utf-8");
+            targetFileExists = true;
+            const parsed = parseJsonWithFormat(targetContent);
+            if (parsed) {
+              const flatTarget = flattenJson(parsed.data as Record<string, unknown>);
+              for (const item of flatTarget) {
+                if (item.value && item.value.trim() !== "") {
+                  existingTargetKeys.add(item.key);
+                }
+              }
             }
+          } catch {
+            // File doesn't exist
+          }
 
-            // No completed languages - return simple error
-            const output: SyncErrorOutput = {
+          // Determine what content to sync
+          let contentToSync: Array<{ key: string; value: string }>;
+
+          if (isMissingLang || !targetFileExists) {
+            // New language or missing file: sync all keys from this source file
+            contentToSync = sourceFileData.flatContent;
+          } else if (!cachedContent) {
+            // No cache: sync only keys missing from target
+            contentToSync = sourceFileData.flatContent.filter(
+              (item) => !existingTargetKeys.has(item.key)
+            );
+          } else {
+            // Has cache: use delta, but only keys from this file
+            contentToSync = fileKeysInDelta;
+          }
+
+          // Apply skip_keys filter
+          const skipSet = getSkipKeysForLang(input.skip_keys, targetLang);
+          const filteredContent = contentToSync.filter(
+            (item) => !skipSet.has(item.key)
+          );
+
+          // Track skipped keys
+          if (skipSet.size > 0) {
+            const skippedInContent = contentToSync
+              .filter((item) => skipSet.has(item.key))
+              .map((item) => item.key);
+            if (skippedInContent.length > 0) {
+              const existing = skippedKeysReport[targetLang] || [];
+              skippedKeysReport[targetLang] = [...new Set([...existing, ...skippedInContent])];
+            }
+          }
+
+          if (filteredContent.length > 0) {
+            langContentMap.set(targetLang, filteredContent);
+          }
+        }
+
+        // Skip API call if no languages need this file
+        if (langContentMap.size === 0) {
+          completedFiles.push(sourceFileData.file.path);
+          continue;
+        }
+
+        // Collect all unique keys to sync for this file (union across all languages)
+        const allKeysToSync = new Set<string>();
+        for (const content of langContentMap.values()) {
+          for (const item of content) {
+            allKeysToSync.add(item.key);
+          }
+        }
+
+        // Get source content for these keys
+        const contentForApi = sourceFileData.flatContent.filter(
+          (item) => allKeysToSync.has(item.key)
+        );
+
+        if (contentForApi.length === 0) {
+          completedFiles.push(sourceFileData.file.path);
+          continue;
+        }
+
+        // Make API call for this file → all languages that need it
+        const langsNeedingSync = Array.from(langContentMap.keys());
+
+        const response = await client.sync({
+          source_lang: input.source_lang,
+          target_langs: langsNeedingSync,
+          content: contentForApi,
+          dry_run: input.dry_run,
+        });
+
+        // Handle API error
+        if (!response.success) {
+          // Return partial error with info about completed files
+          if (completedFiles.length > 0) {
+            const completedLangs = Array.from(langResults.entries())
+              .filter(([_, r]) => r.translated_count > 0 || r.files_written.length > 0)
+              .map(([lang]) => lang);
+
+            const output: SyncPartialErrorOutput = {
               success: false,
+              partial_results: {
+                languages_completed: completedLangs,
+                files_written: allFilesWritten,
+                credits_used: totalCreditsUsed,
+              },
               error: {
                 code: response.error.code,
                 message: response.error.message,
+                failed_language: langsNeedingSync[0],
+                remaining_languages: langsNeedingSync,
                 current_balance: response.error.currentBalance,
                 required_credits: response.error.requiredCredits,
                 top_up_url: response.error.topUpUrl,
@@ -697,257 +735,56 @@ export function registerSyncTranslations(server: McpServer): void {
             };
           }
 
-          // Handle dry run response - just accumulate costs
-          if ("delta" in response && response.cost) {
-            totalWordsToTranslate += response.cost.wordsToTranslate || 0;
-            totalCreditsUsed += response.cost.creditsRequired || 0;
-            currentBalance = response.cost.currentBalance || 0;
-            completedLanguages.push(targetLang);
-            continue;
-          }
-
-          // Handle execute response - write files immediately for this language
-          if ("results" in response && response.cost) {
-            totalCreditsUsed += response.cost.creditsUsed || 0;
-            currentBalance = response.cost.balanceAfterSync || 0;
-
-            const result = response.results[0];
-            if (!result) {
-              continue;
-            }
-
-            const filesWrittenForLang: string[] = [];
-
-            // Write files for this language if requested
-            if (input.write_to_files) {
-              // Check if target locale exists (use detected files)
-              const targetLocale = detection.locales.find((l) => l.lang === targetLang);
-
-              for (const sourceFileData of sourceFilesData) {
-                // Compute target file path
-                let targetFilePath: string | null = null;
-
-                if (targetLocale && targetLocale.files.length > 0) {
-                  // Use existing detected target file path
-                  // Match by namespace or use first file for single-file projects
-                  const matchingFile = targetLocale.files.find(
-                    (f) => f.namespace === sourceFileData.file.namespace
-                  ) || targetLocale.files[0];
-                  targetFilePath = matchingFile.path;
-                } else {
-                  // New language - compute path from source
-                  targetFilePath = computeTargetFilePath(
-                    sourceFileData.file.path,
-                    input.source_lang,
-                    targetLang
-                  );
-                }
-
-                // Safety check: prevent overwriting source file
-                if (!targetFilePath || targetFilePath === sourceFileData.file.path) {
-                  continue;
-                }
-
-                const resolvedPath = resolve(targetFilePath);
-                if (!isPathWithinProject(resolvedPath, projectPath)) {
-                  continue;
-                }
-
-                // Get keys that belong to this source file
-                const sourceFileKeys = new Set(sourceFileData.flatContent.map((item) => item.key));
-
-                // Filter translations to only those from this source file
-                const fileTranslations = result.translations.filter(
-                  (t) => sourceFileKeys.has(t.key)
-                );
-
-                if (fileTranslations.length === 0) {
-                  continue;
-                }
-
-                // Read existing target file content (if exists)
-                let existingContent: Record<string, unknown> = {};
-                try {
-                  const existingFileContent = await readFile(resolvedPath, "utf-8");
-                  const parsed = parseJsonSafe(existingFileContent);
-                  if (parsed) {
-                    existingContent = parsed as Record<string, unknown>;
-                  }
-                } catch {
-                  // File doesn't exist yet, start with empty object
-                }
-
-                // Unflatten and merge translations
-                const newTranslations = unflattenJson(fileTranslations);
-                let mergedContent = deepMerge(existingContent, newTranslations);
-                mergedContent = removeExtraKeys(mergedContent, sourceFileKeys);
-
-                // Write file
-                await mkdir(dirname(resolvedPath), { recursive: true });
-                const fileContent = stringifyWithFormat(mergedContent, sourceFileData.format);
-                await writeFile(resolvedPath, fileContent, "utf-8");
-
-                filesWrittenForLang.push(resolvedPath);
-                allFilesWritten.push(resolvedPath);
-              }
-            }
-
-            completedResults.push({
-              language: targetLang,
-              translated_count: result.translatedCount,
-              skipped_keys: skippedKeysReport[targetLang],
-              file_written: filesWrittenForLang.length > 0 ? filesWrittenForLang.join(", ") : null,
-            });
-            completedLanguages.push(targetLang);
-
-            // Update cache after each successful language write
-            if (input.write_to_files) {
-              await writeSyncCache(projectPath, input.source_lang, flatContent);
-            }
-          }
-        }
-
-        // All languages processed successfully
-
-        // Handle dry run response
-        if (input.dry_run) {
-          const skippedMsg = Object.keys(skippedKeysReport).length > 0
-            ? ` Skipped keys: ${JSON.stringify(skippedKeysReport)}`
-            : "";
-          const output: SyncPreviewOutput = {
-            success: true,
-            dry_run: true,
-            delta: {
-              new_keys: localDelta.newKeys,
-              changed_keys: localDelta.changedKeys,
-              total_keys_to_sync: localDelta.contentToSync.length,
+          const output: SyncErrorOutput = {
+            success: false,
+            error: {
+              code: response.error.code,
+              message: response.error.message,
+              current_balance: response.error.currentBalance,
+              required_credits: response.error.requiredCredits,
+              top_up_url: response.error.topUpUrl,
             },
-            cost: {
-              words_to_translate: totalWordsToTranslate,
-              credits_required: totalCreditsUsed,
-              current_balance: currentBalance,
-              balance_after_sync: currentBalance - totalCreditsUsed,
-            },
-            message: `Preview: ${localDelta.contentToSync.length} keys to sync, ${totalCreditsUsed} credits required.${skippedMsg} Run with dry_run=false to execute.`,
           };
           return {
             content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
           };
         }
 
-        // Return success with all completed results
-        const skippedMsg = Object.keys(skippedKeysReport).length > 0
-          ? ` Skipped: ${JSON.stringify(skippedKeysReport)}`
-          : "";
-        const totalTranslated = completedResults.reduce((sum, r) => sum + r.translated_count, 0);
-        const output: SyncExecuteOutput = {
-          success: true,
-          dry_run: false,
-          results: completedResults,
-          cost: {
-            credits_used: totalCreditsUsed,
-            balance_after_sync: currentBalance,
-          },
-          message: `Sync complete. ${totalTranslated} keys translated across ${completedLanguages.length} languages.${skippedMsg}`,
-        };
-        return {
-          content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
-        };
-      }
+        // Handle dry run response - accumulate costs
+        if ("delta" in response && response.cost) {
+          totalWordsToTranslate += response.cost.wordsToTranslate || 0;
+          totalCreditsUsed += response.cost.creditsRequired || 0;
+          currentBalance = response.cost.currentBalance || 0;
+          completedFiles.push(sourceFileData.file.path);
+          continue;
+        }
 
-      // No skip_keys - use batch approach
-      const response = await client.sync({
-        source_lang: input.source_lang,
-        target_langs: input.target_langs,
-        content: localDelta.contentToSync,
-        dry_run: input.dry_run,
-      });
+        // Handle execute response - write files
+        if ("results" in response && response.cost) {
+          totalCreditsUsed += response.cost.creditsUsed || 0;
+          currentBalance = response.cost.balanceAfterSync || 0;
 
-      // Handle error response
-      if (!response.success) {
-        const output: SyncErrorOutput = {
-          success: false,
-          error: {
-            code: response.error.code,
-            message: response.error.message,
-            current_balance: response.error.currentBalance,
-            required_credits: response.error.requiredCredits,
-            top_up_url: response.error.topUpUrl,
-          },
-        };
-        return {
-          content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
-        };
-      }
-
-      // Handle dry run response - use local delta for accurate new/changed detection
-      if (input.dry_run && "delta" in response) {
-        const output: SyncPreviewOutput = {
-          success: true,
-          dry_run: true,
-          delta: {
-            new_keys: localDelta.newKeys,
-            changed_keys: localDelta.changedKeys,
-            total_keys_to_sync: localDelta.contentToSync.length,
-          },
-          cost: {
-            words_to_translate: response.cost.wordsToTranslate,
-            credits_required: response.cost.creditsRequired,
-            current_balance: response.cost.currentBalance,
-            balance_after_sync: response.cost.balanceAfterSync,
-          },
-          message: `Preview: ${localDelta.contentToSync.length} keys to sync (${localDelta.newKeys.length} new, ${localDelta.changedKeys.length} changed), ${response.cost.creditsRequired} credits required. Run with dry_run=false to execute.`,
-        };
-        return {
-          content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
-        };
-      }
-
-      // Handle execute response
-      if ("results" in response) {
-        const results: Array<{
-          language: string;
-          translated_count: number;
-          file_written: string | null;
-        }> = [];
-
-        // Write translated content to files if requested
-        if (input.write_to_files) {
+          // Write translations for each language
           for (const result of response.results) {
-            const lang = result.language;
-            const filesWritten: string[] = [];
+            const targetLang = result.language;
 
-            // Write to each source file's corresponding target file
-            for (const sourceFileData of sourceFilesData) {
-              // Compute target file path
-              const targetFilePath = computeTargetFilePath(
-                sourceFileData.file.path,
-                input.source_lang,
-                lang
-              );
+            // Always compute target path from source (no namespace matching!)
+            const targetFilePath = computeTargetFilePath(
+              sourceFileData.file.path,
+              input.source_lang,
+              targetLang
+            );
 
-              // Skip if path computation failed or would overwrite source
-              if (!targetFilePath || targetFilePath === sourceFileData.file.path) {
-                continue;
-              }
+            if (!targetFilePath || targetFilePath === sourceFileData.file.path) {
+              continue;
+            }
 
-              const resolvedPath = resolve(targetFilePath);
-              if (!isPathWithinProject(resolvedPath, projectPath)) {
-                continue;
-              }
+            const resolvedPath = resolve(targetFilePath);
+            if (!isPathWithinProject(resolvedPath, projectPath)) {
+              continue;
+            }
 
-              // Get the keys that belong to this source file
-              const sourceFileKeys = new Set(sourceFileData.flatContent.map((item) => item.key));
-
-              // Filter translations to only those from this source file
-              const fileTranslations = result.translations.filter(
-                (t) => sourceFileKeys.has(t.key)
-              );
-
-              if (fileTranslations.length === 0) {
-                continue;
-              }
-
+            if (input.write_to_files) {
               // Read existing target file content (if exists)
               let existingContent: Record<string, unknown> = {};
               try {
@@ -960,69 +797,92 @@ export function registerSyncTranslations(server: McpServer): void {
                 // File doesn't exist yet, start with empty object
               }
 
-              // Unflatten the new translations
-              const newTranslations = unflattenJson(fileTranslations);
-
-              // Deep merge: new translations override existing ones
+              // Unflatten and merge translations
+              const newTranslations = unflattenJson(result.translations);
               let mergedContent = deepMerge(existingContent, newTranslations);
-
-              // Remove any keys in target that don't exist in this source file
               mergedContent = removeExtraKeys(mergedContent, sourceFileKeys);
 
-              // Ensure directory exists
+              // Write file
               await mkdir(dirname(resolvedPath), { recursive: true });
-
-              // Write file with format preservation
               const fileContent = stringifyWithFormat(mergedContent, sourceFileData.format);
               await writeFile(resolvedPath, fileContent, "utf-8");
 
-              filesWritten.push(resolvedPath);
+              allFilesWritten.push(resolvedPath);
+
+              // Update per-language results
+              const langResult = langResults.get(targetLang)!;
+              langResult.translated_count += result.translatedCount;
+              langResult.files_written.push(resolvedPath);
+            } else {
+              // Just track count without writing
+              const langResult = langResults.get(targetLang)!;
+              langResult.translated_count += result.translatedCount;
             }
+          }
 
-            results.push({
-              language: lang,
-              translated_count: result.translatedCount,
-              file_written: filesWritten.length > 0 ? filesWritten.join(", ") : null,
-            });
-          }
-        } else {
-          for (const result of response.results) {
-            results.push({
-              language: result.language,
-              translated_count: result.translatedCount,
-              file_written: null,
-            });
-          }
+          completedFiles.push(sourceFileData.file.path);
         }
+      }
 
-        // Update cache with current source content after successful sync
+      // Update cache after all files processed
+      if (input.write_to_files && !input.dry_run) {
         await writeSyncCache(projectPath, input.source_lang, flatContent);
+      }
 
-        const output: SyncExecuteOutput = {
+      // Build final response
+      if (input.dry_run) {
+        const output: SyncPreviewOutput = {
           success: true,
-          dry_run: false,
-          results,
-          cost: {
-            credits_used: response.cost.creditsUsed,
-            balance_after_sync: response.cost.balanceAfterSync,
+          dry_run: true,
+          delta: {
+            new_keys: localDelta.newKeys,
+            changed_keys: localDelta.changedKeys,
+            total_keys_to_sync: localDelta.contentToSync.length,
           },
-          message: `Sync complete. ${response.results.reduce(
-            (sum, r) => sum + r.translatedCount,
-            0
-          )} keys translated across ${response.results.length} languages. ${response.cost.creditsUsed} credits used.`,
+          cost: {
+            words_to_translate: totalWordsToTranslate,
+            credits_required: totalCreditsUsed,
+            current_balance: currentBalance,
+            balance_after_sync: currentBalance - totalCreditsUsed,
+          },
+          message: `Preview: ${localDelta.contentToSync.length} keys to sync across ${sourceFilesData.length} file(s), ${totalCreditsUsed} credits required. Run with dry_run=false to execute.`,
         };
         return {
           content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
         };
       }
 
-      // Fallback error
-      const output: SyncErrorOutput = {
-        success: false,
-        error: {
-          code: "UNEXPECTED_RESPONSE",
-          message: "Unexpected response from API",
+      // Build results array from aggregated per-language data
+      const results: Array<{
+        language: string;
+        translated_count: number;
+        skipped_keys?: string[];
+        file_written: string | null;
+      }> = [];
+
+      for (const [lang, data] of langResults) {
+        results.push({
+          language: lang,
+          translated_count: data.translated_count,
+          skipped_keys: skippedKeysReport[lang],
+          file_written: data.files_written.length > 0 ? data.files_written.join(", ") : null,
+        });
+      }
+
+      const totalTranslated = results.reduce((sum, r) => sum + r.translated_count, 0);
+      const skippedMsg = Object.keys(skippedKeysReport).length > 0
+        ? ` Skipped: ${JSON.stringify(skippedKeysReport)}`
+        : "";
+
+      const output: SyncExecuteOutput = {
+        success: true,
+        dry_run: false,
+        results,
+        cost: {
+          credits_used: totalCreditsUsed,
+          balance_after_sync: currentBalance,
         },
+        message: `Sync complete. ${totalTranslated} keys translated across ${input.target_langs.length} languages.${skippedMsg}`,
       };
       return {
         content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
