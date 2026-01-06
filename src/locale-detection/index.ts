@@ -13,6 +13,7 @@ import {
   type FrameworkPattern,
 } from "./patterns.js";
 import { countKeys, parseJsonSafe } from "../utils/json-parser.js";
+import { getLocaleFileExtension } from "../utils/arb-parser.js";
 
 export interface LocaleFile {
   /** Absolute path to the file */
@@ -212,15 +213,24 @@ async function groupByLanguage(
 
 /**
  * Extract language code from file path
- * Supports patterns like: /locales/en.json, /messages/en/common.json, /public/locales/en/translation.json
+ * Supports patterns like:
+ * - /locales/en.json, /messages/en/common.json, /public/locales/en/translation.json
+ * - /lib/l10n/app_en.arb (Flutter underscore pattern)
  */
 function extractLanguageFromPath(filePath: string): string | null {
   const parts = filePath.split("/");
-  const fileName = basename(filePath, ".json");
+  const ext = getLocaleFileExtension(filePath);
+  const fileName = basename(filePath, ext);
 
-  // Check if filename is a language code (e.g., en.json)
+  // Check if filename is a language code (e.g., en.json, en.arb)
   if (isLikelyLanguageCode(fileName)) {
     return fileName;
+  }
+
+  // Check Flutter-style underscore pattern (e.g., app_en.arb, intl_de.arb)
+  const underscoreMatch = fileName.match(/_([a-z]{2}(?:-[A-Z]{2})?)$/);
+  if (underscoreMatch && isLikelyLanguageCode(underscoreMatch[1])) {
+    return underscoreMatch[1];
   }
 
   // Check parent directories for language code

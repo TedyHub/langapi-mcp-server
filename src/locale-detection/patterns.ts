@@ -62,6 +62,17 @@ export const FRAMEWORK_PATTERNS: Record<string, FrameworkPattern> = {
     ],
     configPattern: /react-intl|IntlProvider|formatMessage/,
   },
+  flutter: {
+    configFiles: ["pubspec.yaml", "l10n.yaml", "lib/l10n.dart"],
+    localeGlobs: [
+      "lib/l10n/*.arb",
+      "l10n/*.arb",
+      "assets/l10n/*.arb",
+      "assets/translations/*.arb",
+      "lib/src/l10n/*.arb",
+    ],
+    configPattern: /flutter_localizations|intl|flutter_gen/,
+  },
   generic: {
     configFiles: [],
     localeGlobs: [
@@ -76,6 +87,10 @@ export const FRAMEWORK_PATTERNS: Record<string, FrameworkPattern> = {
       "src/lang/*.json",
       "src/messages/*.json",
       "public/locales/*.json",
+      // ARB files (Flutter)
+      "lib/l10n/*.arb",
+      "l10n/*.arb",
+      "locales/*.arb",
     ],
   },
 };

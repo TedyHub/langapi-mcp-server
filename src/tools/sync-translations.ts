@@ -14,6 +14,12 @@ import {
   parseJsonSafe,
 } from "../utils/json-parser.js";
 import {
+  isArbFile,
+  parseArbContent,
+  mergeArbContent,
+  getLocaleFileExtension,
+} from "../utils/arb-parser.js";
+import {
   parseJsonWithFormat,
   stringifyWithFormat,
   type JsonFormat,
@@ -227,28 +233,37 @@ function removeExtraKeys(
 /**
  * Compute target file path by replacing source language with target language.
  * Handles both directory-based (locales/en/file.json) and flat (locales/en.json) structures.
+ * Also supports Flutter ARB files with underscore naming (app_en.arb → app_ko.arb).
  */
 function computeTargetFilePath(
   sourcePath: string,
   sourceLang: string,
   targetLang: string
 ): string | null {
+  const ext = getLocaleFileExtension(sourcePath);
+
   // Try directory-based replacement first: /en/ → /ko/
   const dirPattern = `/${sourceLang}/`;
   if (sourcePath.includes(dirPattern)) {
     return sourcePath.replace(dirPattern, `/${targetLang}/`);
   }
 
-  // Try flat file replacement: /en.json → /ko.json
-  const filePattern = `/${sourceLang}.json`;
+  // Try flat file replacement: /en.json → /ko.json or /en.arb → /ko.arb
+  const filePattern = `/${sourceLang}${ext}`;
   if (sourcePath.endsWith(filePattern)) {
-    return sourcePath.slice(0, -filePattern.length) + `/${targetLang}.json`;
+    return sourcePath.slice(0, -filePattern.length) + `/${targetLang}${ext}`;
   }
 
   // Try filename with prefix: messages.en.json → messages.ko.json
-  const prefixPattern = `.${sourceLang}.json`;
+  const prefixPattern = `.${sourceLang}${ext}`;
   if (sourcePath.endsWith(prefixPattern)) {
-    return sourcePath.slice(0, -prefixPattern.length) + `.${targetLang}.json`;
+    return sourcePath.slice(0, -prefixPattern.length) + `.${targetLang}${ext}`;
+  }
+
+  // Try Flutter-style underscore pattern: app_en.arb → app_ko.arb
+  const underscorePattern = `_${sourceLang}${ext}`;
+  if (sourcePath.endsWith(underscorePattern)) {
+    return sourcePath.slice(0, -underscorePattern.length) + `_${targetLang}${ext}`;
   }
 
   // Cannot determine target path
@@ -308,6 +323,8 @@ export function registerSyncTranslations(server: McpServer): void {
         content: Record<string, unknown>;
         flatContent: Array<{ key: string; value: string }>;
         format: JsonFormat;
+        /** ARB metadata (keys starting with @) - only populated for .arb files */
+        arbMetadata?: Record<string, unknown>;
       }
 
       const sourceFilesData: SourceFileData[] = [];
@@ -316,12 +333,25 @@ export function registerSyncTranslations(server: McpServer): void {
         const content = await readFile(file.path, "utf-8");
         const parsed = parseJsonWithFormat(content);
         if (parsed) {
-          const flatContent = flattenJson(parsed.data as Record<string, unknown>);
+          let flatContent: Array<{ key: string; value: string }>;
+          let arbMetadata: Record<string, unknown> | undefined;
+
+          if (isArbFile(file.path)) {
+            // ARB file: extract translatable keys only, preserve metadata
+            const arbContent = parseArbContent(parsed.data as Record<string, unknown>);
+            flatContent = arbContent.translatableKeys;
+            arbMetadata = arbContent.metadata;
+          } else {
+            // Regular JSON: flatten all keys
+            flatContent = flattenJson(parsed.data as Record<string, unknown>);
+          }
+
           sourceFilesData.push({
             file,
             content: parsed.data as Record<string, unknown>,
             flatContent,
             format: parsed.format,
+            arbMetadata,
           });
         }
       }
@@ -785,6 +815,8 @@ export function registerSyncTranslations(server: McpServer): void {
             }
 
             if (input.write_to_files) {
+              let mergedContent: Record<string, unknown>;
+
               // Read existing target file content (if exists)
               let existingContent: Record<string, unknown> = {};
               try {
@@ -797,10 +829,21 @@ export function registerSyncTranslations(server: McpServer): void {
                 // File doesn't exist yet, start with empty object
               }
 
-              // Unflatten and merge translations
-              const newTranslations = unflattenJson(result.translations);
-              let mergedContent = deepMerge(existingContent, newTranslations);
-              mergedContent = removeExtraKeys(mergedContent, sourceFileKeys);
+              if (isArbFile(resolvedPath) && sourceFileData.arbMetadata) {
+                // ARB file: merge with existing, preserve metadata, update locale
+                mergedContent = mergeArbContent(
+                  existingContent,
+                  result.translations,
+                  sourceFileData.arbMetadata,
+                  sourceFileKeys,
+                  targetLang
+                );
+              } else {
+                // Regular JSON: merge and remove extra keys
+                const newTranslations = unflattenJson(result.translations);
+                mergedContent = deepMerge(existingContent, newTranslations);
+                mergedContent = removeExtraKeys(mergedContent, sourceFileKeys);
+              }
 
               // Write file
               await mkdir(dirname(resolvedPath), { recursive: true });
