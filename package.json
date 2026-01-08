@@ -1,13 +1,12 @@
 {
   "name": "@langapi/mcp-server",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "MCP server for LangAPI - AI-powered translation management for i18n projects",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "langapi-mcp": "./bin/langapi-mcp.js",
-    "@langapi/mcp-server": "./bin/langapi-mcp.js"
+    "langapi-mcp": "./bin/langapi-mcp.js"
   },
   "files": [
     "dist",
