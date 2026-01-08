@@ -449,16 +449,17 @@ export function registerSyncTranslations(server: McpServer): void {
         }
       }
 
-      // Also create merged versions for backward compatibility with cache/delta logic
-      const sourceContent: Record<string, unknown> = {};
+      // Build merged flatContent from each file's flatContent (not from content objects)
+      // This is needed because Apple formats (.strings, .xcstrings, .stringsdict)
+      // store keys in flatContent, not in the content object
+      let flatContent: Array<{ key: string; value: string }> = [];
       let sourceFormat: JsonFormat = { indent: "  ", trailingNewline: true };
+
       for (const fileData of sourceFilesData) {
-        Object.assign(sourceContent, fileData.content);
+        flatContent = flatContent.concat(fileData.flatContent);
         sourceFormat = fileData.format;
       }
 
-      // Flatten source content for API
-      const flatContent = flattenJson(sourceContent);
       const sourceKeys = new Set(flatContent.map((item) => item.key));
 
       // Read cache and detect local delta
@@ -786,12 +787,31 @@ export function registerSyncTranslations(server: McpServer): void {
           try {
             const targetContent = await readFile(resolvedPath, "utf-8");
             targetFileExists = true;
-            const parsed = parseJsonWithFormat(targetContent);
-            if (parsed) {
-              const flatTarget = flattenJson(parsed.data as Record<string, unknown>);
-              for (const item of flatTarget) {
-                if (item.value && item.value.trim() !== "") {
-                  existingTargetKeys.add(item.key);
+
+            // Use appropriate parser based on source file type
+            if (sourceFileData.appleType === "strings") {
+              const parsed = parseStringsContent(targetContent);
+              for (const entry of parsed.entries) {
+                if (entry.value && entry.value.trim() !== "") {
+                  existingTargetKeys.add(entry.key);
+                }
+              }
+            } else if (sourceFileData.appleType === "stringsdict") {
+              const parsed = parseStringsDictContent(targetContent);
+              if (parsed) {
+                for (const entry of parsed.entries) {
+                  existingTargetKeys.add(entry.key);
+                }
+              }
+            } else {
+              // JSON or ARB files
+              const parsed = parseJsonWithFormat(targetContent);
+              if (parsed) {
+                const flatTarget = flattenJson(parsed.data as Record<string, unknown>);
+                for (const item of flatTarget) {
+                  if (item.value && item.value.trim() !== "") {
+                    existingTargetKeys.add(item.key);
+                  }
                 }
               }
             }
