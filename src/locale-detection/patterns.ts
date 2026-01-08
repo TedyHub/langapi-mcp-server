@@ -73,6 +73,32 @@ export const FRAMEWORK_PATTERNS: Record<string, FrameworkPattern> = {
     ],
     configPattern: /flutter_localizations|intl|flutter_gen/,
   },
+  "ios-macos": {
+    configFiles: [
+      "*.xcodeproj/project.pbxproj",
+      "*.xcworkspace/contents.xcworkspacedata",
+      "Package.swift",
+      "Info.plist",
+    ],
+    localeGlobs: [
+      // .lproj directory structure
+      "*.lproj/Localizable.strings",
+      "*.lproj/Localizable.stringsdict",
+      "*.lproj/*.strings",
+      "*.lproj/*.stringsdict",
+      // Nested in Resources or Sources
+      "Resources/*.lproj/*.strings",
+      "Resources/*.lproj/*.stringsdict",
+      "**/Resources/*.lproj/*.strings",
+      "**/Resources/*.lproj/*.stringsdict",
+      "Sources/**/*.lproj/*.strings",
+      // String Catalogs (single file with all languages)
+      "*.xcstrings",
+      "**/Localizable.xcstrings",
+      "**/*.xcstrings",
+    ],
+    configPattern: /import\s+(UIKit|AppKit|SwiftUI|Foundation)|NSLocalizedString/,
+  },
   generic: {
     configFiles: [],
     localeGlobs: [
@@ -91,6 +117,10 @@ export const FRAMEWORK_PATTERNS: Record<string, FrameworkPattern> = {
       "lib/l10n/*.arb",
       "l10n/*.arb",
       "locales/*.arb",
+      // iOS/macOS files
+      "*.lproj/*.strings",
+      "*.lproj/*.stringsdict",
+      "*.xcstrings",
     ],
   },
 };

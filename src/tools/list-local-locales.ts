@@ -1,6 +1,6 @@
 /**
  * list_local_locales MCP Tool
- * Scans project for locale files (JSON and ARB) and detects i18n framework
+ * Scans project for locale files (JSON, ARB, .strings, .xcstrings, .stringsdict) and detects i18n framework
  */
 
 import { z } from "zod";
@@ -47,7 +47,7 @@ export interface ListLocalLocalesOutput {
 export function registerListLocalLocales(server: McpServer): void {
   server.tool(
     "list_local_locales",
-    "Scan project for locale files (JSON and ARB), detect i18n framework (next-intl, i18next, react-intl, flutter, generic), and return structured information about available translations.",
+    "Scan project for locale files (JSON, ARB, .strings, .xcstrings, .stringsdict), detect i18n framework (next-intl, i18next, react-intl, flutter, ios-macos, generic), and return structured information about available translations.",
     ListLocalLocalesSchema.shape,
     async (args): Promise<{ content: Array<{ type: "text"; text: string }> }> => {
       const input = ListLocalLocalesSchema.parse(args);

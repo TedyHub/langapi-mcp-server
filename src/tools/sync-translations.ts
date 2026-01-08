@@ -5,7 +5,7 @@
 
 import { z } from "zod";
 import { readFile, writeFile, mkdir } from "fs/promises";
-import { dirname, join, resolve } from "path";
+import { dirname, resolve } from "path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { detectLocales, type LocaleFile } from "../locale-detection/index.js";
 import {
@@ -36,6 +36,29 @@ import {
   writeSyncCache,
   detectLocalDelta,
 } from "../utils/sync-cache.js";
+import {
+  detectAppleFileType,
+  isXCStringsFile,
+  computeAppleLprojTargetPath,
+  type AppleFileType,
+} from "../utils/apple-common.js";
+import {
+  parseStringsContent,
+  mergeStringsContent,
+  type StringsContent,
+} from "../utils/strings-parser.js";
+import {
+  parseXCStringsContent,
+  updateXCStringsLocale,
+  reconstructXCStringsContent,
+  type XCStringsFile,
+} from "../utils/xcstrings-parser.js";
+import {
+  parseStringsDictContent,
+  flattenStringsDictForApi,
+  mergeStringsDictContent,
+  type StringsDictEntry,
+} from "../utils/stringsdict-parser.js";
 
 // Input schema
 const SyncTranslationsSchema = z.object({
@@ -234,6 +257,7 @@ function removeExtraKeys(
  * Compute target file path by replacing source language with target language.
  * Handles both directory-based (locales/en/file.json) and flat (locales/en.json) structures.
  * Also supports Flutter ARB files with underscore naming (app_en.arb → app_ko.arb).
+ * Also supports iOS/macOS .lproj directories (en.lproj/Localizable.strings → de.lproj/Localizable.strings).
  */
 function computeTargetFilePath(
   sourcePath: string,
@@ -241,6 +265,18 @@ function computeTargetFilePath(
   targetLang: string
 ): string | null {
   const ext = getLocaleFileExtension(sourcePath);
+
+  // Try iOS/macOS .lproj directory pattern first
+  const lprojPath = computeAppleLprojTargetPath(sourcePath, sourceLang, targetLang);
+  if (lprojPath) {
+    return lprojPath;
+  }
+
+  // xcstrings files contain all languages in one file - return same path
+  // (will be handled specially in the write logic)
+  if (isXCStringsFile(sourcePath)) {
+    return sourcePath;
+  }
 
   // Try directory-based replacement first: /en/ → /ko/
   const dirPattern = `/${sourceLang}/`;
@@ -325,12 +361,68 @@ export function registerSyncTranslations(server: McpServer): void {
         format: JsonFormat;
         /** ARB metadata (keys starting with @) - only populated for .arb files */
         arbMetadata?: Record<string, unknown>;
+        /** Apple file type if applicable */
+        appleType?: AppleFileType;
+        /** Strings file parsed content - for .strings files */
+        stringsContent?: StringsContent;
+        /** Stringsdict entries - for .stringsdict files */
+        stringsDictEntries?: StringsDictEntry[];
+        /** XCStrings parsed data - for .xcstrings files */
+        xcstringsData?: XCStringsFile;
       }
 
       const sourceFilesData: SourceFileData[] = [];
 
       for (const file of sourceLocale.files) {
         const content = await readFile(file.path, "utf-8");
+        const appleType = detectAppleFileType(file.path);
+
+        // Handle Apple file formats
+        if (appleType === "strings") {
+          const stringsContent = parseStringsContent(content);
+          sourceFilesData.push({
+            file,
+            content: {},
+            flatContent: stringsContent.entries,
+            format: { indent: "  ", trailingNewline: true },
+            appleType: "strings",
+            stringsContent,
+          });
+          continue;
+        }
+
+        if (appleType === "xcstrings") {
+          const xcstringsData = parseXCStringsContent(content);
+          if (xcstringsData) {
+            sourceFilesData.push({
+              file,
+              content: {}, // xcstrings uses xcstringsData instead
+              flatContent: xcstringsData.entries,
+              format: { indent: "  ", trailingNewline: true },
+              appleType: "xcstrings",
+              xcstringsData: xcstringsData.metadata,
+            });
+          }
+          continue;
+        }
+
+        if (appleType === "stringsdict") {
+          const stringsDictContent = parseStringsDictContent(content);
+          if (stringsDictContent) {
+            const flatContent = flattenStringsDictForApi(stringsDictContent.entries);
+            sourceFilesData.push({
+              file,
+              content: {},
+              flatContent,
+              format: { indent: "  ", trailingNewline: true },
+              appleType: "stringsdict",
+              stringsDictEntries: stringsDictContent.entries,
+            });
+          }
+          continue;
+        }
+
+        // Handle JSON/ARB files
         const parsed = parseJsonWithFormat(content);
         if (parsed) {
           let flatContent: Array<{ key: string; value: string }>;
@@ -815,47 +907,131 @@ export function registerSyncTranslations(server: McpServer): void {
             }
 
             if (input.write_to_files) {
-              let mergedContent: Record<string, unknown>;
-
-              // Read existing target file content (if exists)
-              let existingContent: Record<string, unknown> = {};
-              try {
-                const existingFileContent = await readFile(resolvedPath, "utf-8");
-                const parsed = parseJsonSafe(existingFileContent);
-                if (parsed) {
-                  existingContent = parsed as Record<string, unknown>;
+              // Handle Apple file formats specially
+              if (sourceFileData.appleType === "strings") {
+                // .strings file: merge and write
+                let existingContent = "";
+                try {
+                  existingContent = await readFile(resolvedPath, "utf-8");
+                } catch {
+                  // File doesn't exist yet
                 }
-              } catch {
-                // File doesn't exist yet, start with empty object
-              }
 
-              if (isArbFile(resolvedPath) && sourceFileData.arbMetadata) {
-                // ARB file: merge with existing, preserve metadata, update locale
-                mergedContent = mergeArbContent(
+                const fileContent = mergeStringsContent(
                   existingContent,
                   result.translations,
-                  sourceFileData.arbMetadata,
-                  sourceFileKeys,
-                  targetLang
+                  sourceFileData.stringsContent?.comments || new Map(),
+                  sourceFileKeys
                 );
+
+                await mkdir(dirname(resolvedPath), { recursive: true });
+                await writeFile(resolvedPath, fileContent, "utf-8");
+
+                allFilesWritten.push(resolvedPath);
+                const langResult = langResults.get(targetLang)!;
+                langResult.translated_count += result.translatedCount;
+                langResult.files_written.push(resolvedPath);
+              } else if (sourceFileData.appleType === "xcstrings" && sourceFileData.xcstringsData) {
+                // .xcstrings file: update in-place (single file with all languages)
+                // Read current state of the xcstrings file
+                let currentXCStrings = sourceFileData.xcstringsData;
+                try {
+                  const currentContent = await readFile(sourceFileData.file.path, "utf-8");
+                  const parsed = parseXCStringsContent(currentContent);
+                  if (parsed) {
+                    currentXCStrings = parsed.metadata;
+                  }
+                } catch {
+                  // Use source data
+                }
+
+                const updatedXCStrings = updateXCStringsLocale(
+                  currentXCStrings,
+                  targetLang,
+                  result.translations
+                );
+
+                const fileContent = reconstructXCStringsContent(updatedXCStrings);
+                await writeFile(sourceFileData.file.path, fileContent, "utf-8");
+
+                // Update sourceFileData.xcstringsData for subsequent languages
+                sourceFileData.xcstringsData = updatedXCStrings;
+
+                if (!allFilesWritten.includes(sourceFileData.file.path)) {
+                  allFilesWritten.push(sourceFileData.file.path);
+                }
+                const langResult = langResults.get(targetLang)!;
+                langResult.translated_count += result.translatedCount;
+                if (!langResult.files_written.includes(sourceFileData.file.path)) {
+                  langResult.files_written.push(sourceFileData.file.path);
+                }
+              } else if (sourceFileData.appleType === "stringsdict" && sourceFileData.stringsDictEntries) {
+                // .stringsdict file: merge and write
+                let existingContent = "";
+                try {
+                  existingContent = await readFile(resolvedPath, "utf-8");
+                } catch {
+                  // File doesn't exist yet
+                }
+
+                const fileContent = mergeStringsDictContent(
+                  existingContent,
+                  result.translations,
+                  sourceFileData.stringsDictEntries,
+                  sourceFileKeys
+                );
+
+                await mkdir(dirname(resolvedPath), { recursive: true });
+                await writeFile(resolvedPath, fileContent, "utf-8");
+
+                allFilesWritten.push(resolvedPath);
+                const langResult = langResults.get(targetLang)!;
+                langResult.translated_count += result.translatedCount;
+                langResult.files_written.push(resolvedPath);
               } else {
-                // Regular JSON: merge and remove extra keys
-                const newTranslations = unflattenJson(result.translations);
-                mergedContent = deepMerge(existingContent, newTranslations);
-                mergedContent = removeExtraKeys(mergedContent, sourceFileKeys);
+                // JSON or ARB files
+                let mergedContent: Record<string, unknown>;
+
+                // Read existing target file content (if exists)
+                let existingContent: Record<string, unknown> = {};
+                try {
+                  const existingFileContent = await readFile(resolvedPath, "utf-8");
+                  const parsed = parseJsonSafe(existingFileContent);
+                  if (parsed) {
+                    existingContent = parsed as Record<string, unknown>;
+                  }
+                } catch {
+                  // File doesn't exist yet, start with empty object
+                }
+
+                if (isArbFile(resolvedPath) && sourceFileData.arbMetadata) {
+                  // ARB file: merge with existing, preserve metadata, update locale
+                  mergedContent = mergeArbContent(
+                    existingContent,
+                    result.translations,
+                    sourceFileData.arbMetadata,
+                    sourceFileKeys,
+                    targetLang
+                  );
+                } else {
+                  // Regular JSON: merge and remove extra keys
+                  const newTranslations = unflattenJson(result.translations);
+                  mergedContent = deepMerge(existingContent, newTranslations);
+                  mergedContent = removeExtraKeys(mergedContent, sourceFileKeys);
+                }
+
+                // Write file
+                await mkdir(dirname(resolvedPath), { recursive: true });
+                const fileContent = stringifyWithFormat(mergedContent, sourceFileData.format);
+                await writeFile(resolvedPath, fileContent, "utf-8");
+
+                allFilesWritten.push(resolvedPath);
+
+                // Update per-language results
+                const langResult = langResults.get(targetLang)!;
+                langResult.translated_count += result.translatedCount;
+                langResult.files_written.push(resolvedPath);
               }
-
-              // Write file
-              await mkdir(dirname(resolvedPath), { recursive: true });
-              const fileContent = stringifyWithFormat(mergedContent, sourceFileData.format);
-              await writeFile(resolvedPath, fileContent, "utf-8");
-
-              allFilesWritten.push(resolvedPath);
-
-              // Update per-language results
-              const langResult = langResults.get(targetLang)!;
-              langResult.translated_count += result.translatedCount;
-              langResult.files_written.push(resolvedPath);
             } else {
               // Just track count without writing
               const langResult = langResults.get(targetLang)!;

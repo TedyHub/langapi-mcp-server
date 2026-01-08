@@ -14,6 +14,14 @@ import {
 } from "./patterns.js";
 import { countKeys, parseJsonSafe } from "../utils/json-parser.js";
 import { getLocaleFileExtension } from "../utils/arb-parser.js";
+import {
+  detectAppleFileType,
+  extractLanguageFromLproj,
+  isXCStringsFile,
+} from "../utils/apple-common.js";
+import { parseStringsContent } from "../utils/strings-parser.js";
+import { parseXCStringsContent } from "../utils/xcstrings-parser.js";
+import { parseStringsDictContent } from "../utils/stringsdict-parser.js";
 
 export interface LocaleFile {
   /** Absolute path to the file */
@@ -169,6 +177,47 @@ async function groupByLanguage(
   const languageMap = new Map<string, LocaleFile[]>();
 
   for (const filePath of files) {
+    // Handle xcstrings specially - contains multiple languages in one file
+    if (isXCStringsFile(filePath)) {
+      try {
+        const content = await readFile(filePath, "utf-8");
+        const parsed = parseXCStringsContent(content);
+        if (parsed) {
+          const relativePath = relative(projectPath, filePath);
+          const keyCount = includeKeyCount ? parsed.entries.length : 0;
+
+          // Add an entry for each language in the xcstrings file
+          for (const [lang, entries] of parsed.allLocalizations) {
+            const localeFile: LocaleFile = {
+              path: filePath,
+              relativePath,
+              namespace: null,
+              keyCount: includeKeyCount ? entries.length : 0,
+            };
+
+            if (!languageMap.has(lang)) {
+              languageMap.set(lang, []);
+            }
+            languageMap.get(lang)!.push(localeFile);
+          }
+
+          // Also add source language if not already present
+          if (!languageMap.has(parsed.sourceLanguage)) {
+            const localeFile: LocaleFile = {
+              path: filePath,
+              relativePath,
+              namespace: null,
+              keyCount,
+            };
+            languageMap.set(parsed.sourceLanguage, [localeFile]);
+          }
+        }
+      } catch {
+        // Ignore read errors
+      }
+      continue;
+    }
+
     const lang = extractLanguageFromPath(filePath);
     if (!lang) continue;
 
@@ -176,9 +225,22 @@ async function groupByLanguage(
     if (includeKeyCount) {
       try {
         const content = await readFile(filePath, "utf-8");
-        const parsed = parseJsonSafe(content);
-        if (parsed) {
-          keyCount = countKeys(parsed);
+        const appleType = detectAppleFileType(filePath);
+
+        if (appleType === "strings") {
+          const parsed = parseStringsContent(content);
+          keyCount = parsed.entries.length;
+        } else if (appleType === "stringsdict") {
+          const parsed = parseStringsDictContent(content);
+          if (parsed) {
+            keyCount = parsed.entries.length;
+          }
+        } else {
+          // JSON or ARB files
+          const parsed = parseJsonSafe(content);
+          if (parsed) {
+            keyCount = countKeys(parsed);
+          }
         }
       } catch {
         // Ignore read errors
@@ -187,8 +249,10 @@ async function groupByLanguage(
 
     const relativePath = relative(projectPath, filePath);
     const dirName = basename(dirname(filePath));
+    // For .lproj directories, the dir name includes .lproj suffix
+    const cleanDirName = dirName.replace(/\.lproj$/i, "");
     const namespace =
-      dirName !== lang && !isLikelyLanguageCode(dirName) ? dirName : null;
+      cleanDirName !== lang && !isLikelyLanguageCode(cleanDirName) ? cleanDirName : null;
 
     const localeFile: LocaleFile = {
       path: filePath,
@@ -216,8 +280,15 @@ async function groupByLanguage(
  * Supports patterns like:
  * - /locales/en.json, /messages/en/common.json, /public/locales/en/translation.json
  * - /lib/l10n/app_en.arb (Flutter underscore pattern)
+ * - /en.lproj/Localizable.strings (iOS/macOS .lproj directory pattern)
  */
 function extractLanguageFromPath(filePath: string): string | null {
+  // Check for iOS/macOS .lproj directory pattern first
+  const lprojLang = extractLanguageFromLproj(filePath);
+  if (lprojLang) {
+    return lprojLang;
+  }
+
   const parts = filePath.split("/");
   const ext = getLocaleFileExtension(filePath);
   const fileName = basename(filePath, ext);
