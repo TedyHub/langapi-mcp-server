@@ -9,6 +9,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { detectLocales } from "../locale-detection/index.js";
 import { getAllKeys, parseJsonSafe, flattenJson } from "../utils/json-parser.js";
 import { LangAPIClient } from "../api/client.js";
+import { isXCStringsFile } from "../utils/apple-common.js";
+import { parseXCStringsContent, extractLocaleFromXCStrings } from "../utils/xcstrings-parser.js";
 import { languageCodeSchema } from "../utils/validation.js";
 
 // Input schema
@@ -96,9 +98,22 @@ export function registerGetTranslationStatus(server: McpServer): void {
       const sourceContent: Record<string, unknown> = {};
       for (const file of sourceLocale.files) {
         const content = await readFile(file.path, "utf-8");
-        const parsed = parseJsonSafe(content);
-        if (parsed) {
-          Object.assign(sourceContent, parsed);
+
+        // Handle xcstrings files specially
+        if (isXCStringsFile(file.path)) {
+          const parsed = parseXCStringsContent(content);
+          if (parsed) {
+            // Extract the user-specified source language translations
+            const entries = extractLocaleFromXCStrings(parsed.metadata, input.source_lang);
+            for (const entry of entries) {
+              sourceContent[entry.key] = entry.value;
+            }
+          }
+        } else {
+          const parsed = parseJsonSafe(content);
+          if (parsed) {
+            Object.assign(sourceContent, parsed);
+          }
         }
       }
 
@@ -140,9 +155,22 @@ export function registerGetTranslationStatus(server: McpServer): void {
         for (const file of targetLocale.files) {
           try {
             const content = await readFile(file.path, "utf-8");
-            const parsed = parseJsonSafe(content);
-            if (parsed) {
-              Object.assign(targetContent, parsed);
+
+            // Handle xcstrings files specially
+            if (isXCStringsFile(file.path)) {
+              const parsed = parseXCStringsContent(content);
+              if (parsed) {
+                // Extract only the target language translations
+                const entries = extractLocaleFromXCStrings(parsed.metadata, targetLang);
+                for (const entry of entries) {
+                  targetContent[entry.key] = entry.value;
+                }
+              }
+            } else {
+              const parsed = parseJsonSafe(content);
+              if (parsed) {
+                Object.assign(targetContent, parsed);
+              }
             }
           } catch {
             // Ignore read errors

@@ -47,12 +47,13 @@ import {
   mergeStringsContent,
   type StringsContent,
 } from "../utils/strings-parser.js";
+import { type XCStringsFile } from "../utils/xcstrings-parser.js";
 import {
-  parseXCStringsContent,
-  updateXCStringsLocale,
-  reconstructXCStringsContent,
-  type XCStringsFile,
-} from "../utils/xcstrings-parser.js";
+  parseXCStringsSource,
+  xcstringsHasMissingKeys,
+  getXCStringsContentToSync,
+  writeXCStringsTranslations,
+} from "../handlers/xcstrings-sync-handler.js";
 import {
   parseStringsDictContent,
   flattenStringsDictForApi,
@@ -392,15 +393,15 @@ export function registerSyncTranslations(server: McpServer): void {
         }
 
         if (appleType === "xcstrings") {
-          const xcstringsData = parseXCStringsContent(content);
-          if (xcstringsData) {
+          const parsed = parseXCStringsSource(file, content);
+          if (parsed) {
             sourceFilesData.push({
-              file,
-              content: {}, // xcstrings uses xcstringsData instead
-              flatContent: xcstringsData.entries,
+              file: parsed.file,
+              content: {},
+              flatContent: parsed.flatContent,
               format: { indent: "  ", trailingNewline: true },
               appleType: "xcstrings",
-              xcstringsData: xcstringsData.metadata,
+              xcstringsData: parsed.xcstringsData,
             });
           }
           continue;
@@ -489,7 +490,21 @@ export function registerSyncTranslations(server: McpServer): void {
             targetLang
           );
 
-          // Skip if path computation failed or would overwrite source
+          // Handle xcstrings files: check for missing translations within the file
+          if (sourceFileData.appleType === "xcstrings" && sourceFileData.xcstringsData) {
+            const hasMissingKeys = xcstringsHasMissingKeys(
+              sourceFileData.xcstringsData,
+              targetLang,
+              sourceFileData.flatContent
+            );
+
+            if (hasMissingKeys && !languagesWithMissingFiles.includes(targetLang)) {
+              languagesWithMissingFiles.push(targetLang);
+            }
+            continue;
+          }
+
+          // Skip if path computation failed or would overwrite source (non-xcstrings)
           if (!targetFilePath || targetFilePath === sourceFileData.file.path) {
             continue;
           }
@@ -724,6 +739,35 @@ export function registerSyncTranslations(server: McpServer): void {
             targetLang
           );
 
+          // Handle xcstrings files specially (same file for all languages)
+          if (sourceFileData.appleType === "xcstrings" && sourceFileData.xcstringsData) {
+            const isMissingLang = missingLanguages.includes(targetLang);
+            const targetHasMissingKeys = languagesWithMissingFiles.includes(targetLang);
+            const skipSet = getSkipKeysForLang(input.skip_keys, targetLang);
+
+            const { contentToSync, skippedKeys } = getXCStringsContentToSync(
+              { file: sourceFileData.file, flatContent: sourceFileData.flatContent, xcstringsData: sourceFileData.xcstringsData },
+              targetLang,
+              cachedContent,
+              fileKeysInDelta,
+              isMissingLang,
+              targetHasMissingKeys,
+              skipSet
+            );
+
+            // Track skipped keys
+            if (skippedKeys.length > 0) {
+              const existing = skippedKeysReport[targetLang] || [];
+              skippedKeysReport[targetLang] = [...new Set([...existing, ...skippedKeys])];
+            }
+
+            if (contentToSync.length > 0) {
+              langContentMap.set(targetLang, contentToSync);
+            }
+            continue;
+          }
+
+          // Non-xcstrings files: skip if target path equals source path
           if (!targetFilePath || targetFilePath === sourceFileData.file.path) {
             continue;
           }
@@ -897,12 +941,17 @@ export function registerSyncTranslations(server: McpServer): void {
               targetLang
             );
 
-            if (!targetFilePath || targetFilePath === sourceFileData.file.path) {
+            // For xcstrings, targetFilePath equals sourceFilePath - that's OK, handle below
+            if (!targetFilePath) {
+              continue;
+            }
+            // Skip non-xcstrings files where target equals source
+            if (targetFilePath === sourceFileData.file.path && sourceFileData.appleType !== "xcstrings") {
               continue;
             }
 
             const resolvedPath = resolve(targetFilePath);
-            if (!isPathWithinProject(resolvedPath, projectPath)) {
+            if (!isPathWithinProject(resolvedPath, projectPath) && sourceFileData.appleType !== "xcstrings") {
               continue;
             }
 
@@ -933,29 +982,12 @@ export function registerSyncTranslations(server: McpServer): void {
                 langResult.files_written.push(resolvedPath);
               } else if (sourceFileData.appleType === "xcstrings" && sourceFileData.xcstringsData) {
                 // .xcstrings file: update in-place (single file with all languages)
-                // Read current state of the xcstrings file
-                let currentXCStrings = sourceFileData.xcstringsData;
-                try {
-                  const currentContent = await readFile(sourceFileData.file.path, "utf-8");
-                  const parsed = parseXCStringsContent(currentContent);
-                  if (parsed) {
-                    currentXCStrings = parsed.metadata;
-                  }
-                } catch {
-                  // Use source data
-                }
-
-                const updatedXCStrings = updateXCStringsLocale(
-                  currentXCStrings,
+                sourceFileData.xcstringsData = await writeXCStringsTranslations(
+                  sourceFileData.file.path,
+                  sourceFileData.xcstringsData,
                   targetLang,
                   result.translations
                 );
-
-                const fileContent = reconstructXCStringsContent(updatedXCStrings);
-                await writeFile(sourceFileData.file.path, fileContent, "utf-8");
-
-                // Update sourceFileData.xcstringsData for subsequent languages
-                sourceFileData.xcstringsData = updatedXCStrings;
 
                 if (!allFilesWritten.includes(sourceFileData.file.path)) {
                   allFilesWritten.push(sourceFileData.file.path);
