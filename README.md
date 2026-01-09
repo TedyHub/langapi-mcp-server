@@ -77,14 +77,10 @@ After editing, **restart Claude Desktop** for changes to take effect.
 
 ```bash
 # Add to current project (stored in .mcp.json)
-claude mcp add --transport stdio langapi \
+claude mcp add langapi \
   --env LANGAPI_API_KEY=your-api-key-here \
-  -- npx @langapi/mcp-server
+  -- npx -y @langapi/mcp-server
 
-# Or add globally for all projects (stored in ~/.claude.json)
-claude mcp add --transport stdio langapi --scope user \
-  --env LANGAPI_API_KEY=your-api-key-here \
-  -- npx @langapi/mcp-server
 ```
 
 **Option 2: Project-level config** (recommended for teams)
