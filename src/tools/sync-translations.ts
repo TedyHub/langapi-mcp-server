@@ -83,6 +83,12 @@ const SyncTranslationsSchema = z.object({
     .record(z.string(), z.array(z.string()))
     .optional()
     .describe("Keys to skip per language, e.g., { 'fr': ['subtitle', 'brand'] }"),
+  hard_sync: z
+    .boolean()
+    .default(false)
+    .describe(
+      "If true, re-translate all changed keys even if target already has translations. If false (default), only translate keys missing in target."
+    ),
 });
 
 export type SyncTranslationsInput = z.infer<typeof SyncTranslationsSchema>;
@@ -753,7 +759,8 @@ export function registerSyncTranslations(server: McpServer): void {
               fileKeysInDelta,
               isMissingLang,
               targetHasMissingKeys,
-              skipSet
+              skipSet,
+              input.hard_sync
             );
 
             // Track skipped keys
@@ -832,7 +839,15 @@ export function registerSyncTranslations(server: McpServer): void {
             );
           } else {
             // Has cache: use delta, but only keys from this file
-            contentToSync = fileKeysInDelta;
+            if (input.hard_sync) {
+              // Hard sync: re-translate all changed keys
+              contentToSync = fileKeysInDelta;
+            } else {
+              // Normal sync: only keys missing from target
+              contentToSync = fileKeysInDelta.filter(
+                (item) => !existingTargetKeys.has(item.key)
+              );
+            }
           }
 
           // Apply skip_keys filter

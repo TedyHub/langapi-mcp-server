@@ -99,6 +99,7 @@ export function xcstringsHasMissingKeys(
  * @param isMissingLang Whether the target language is completely missing
  * @param hasMissingKeys Whether target has any missing keys
  * @param skipKeys Set of keys to skip for this language
+ * @param hardSync If true, re-translate all changed keys even if target already has translations
  * @returns Content to sync (after filtering skip keys)
  */
 export function getXCStringsContentToSync(
@@ -108,7 +109,8 @@ export function getXCStringsContentToSync(
   deltaContent: KeyValue[],
   isMissingLang: boolean,
   hasMissingKeys: boolean,
-  skipKeys: Set<string>
+  skipKeys: Set<string>,
+  hardSync: boolean = false
 ): { contentToSync: KeyValue[]; skippedKeys: string[] } {
   let contentToSync: KeyValue[];
 
@@ -126,7 +128,19 @@ export function getXCStringsContentToSync(
     );
   } else {
     // Has cache: use delta
-    contentToSync = deltaContent;
+    if (hardSync) {
+      // Hard sync: re-translate all changed keys
+      contentToSync = deltaContent;
+    } else {
+      // Normal sync: only keys missing from target
+      const existingTargetKeys = getXCStringsExistingKeys(
+        sourceData.xcstringsData,
+        targetLang
+      );
+      contentToSync = deltaContent.filter(
+        (item) => !existingTargetKeys.has(item.key)
+      );
+    }
   }
 
   // Apply skip_keys filter
