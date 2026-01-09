@@ -32,11 +32,6 @@ import {
   isPathWithinProject,
 } from "../utils/validation.js";
 import {
-  readSyncCache,
-  writeSyncCache,
-  detectLocalDelta,
-} from "../utils/sync-cache.js";
-import {
   detectAppleFileType,
   isXCStringsFile,
   computeAppleLprojTargetPath,
@@ -391,7 +386,7 @@ export function registerSyncTranslations(server: McpServer): void {
             file,
             content: {},
             flatContent: stringsContent.entries,
-            format: { indent: "  ", trailingNewline: true },
+            format: { indent: "  ", trailingNewline: true, keyStructure: "flat" },
             appleType: "strings",
             stringsContent,
           });
@@ -405,7 +400,7 @@ export function registerSyncTranslations(server: McpServer): void {
               file: parsed.file,
               content: {},
               flatContent: parsed.flatContent,
-              format: { indent: "  ", trailingNewline: true },
+              format: { indent: "  ", trailingNewline: true, keyStructure: "flat" },
               appleType: "xcstrings",
               xcstringsData: parsed.xcstringsData,
             });
@@ -421,7 +416,7 @@ export function registerSyncTranslations(server: McpServer): void {
               file,
               content: {},
               flatContent,
-              format: { indent: "  ", trailingNewline: true },
+              format: { indent: "  ", trailingNewline: true, keyStructure: "flat" },
               appleType: "stringsdict",
               stringsDictEntries: stringsDictContent.entries,
             });
@@ -459,7 +454,7 @@ export function registerSyncTranslations(server: McpServer): void {
       // This is needed because Apple formats (.strings, .xcstrings, .stringsdict)
       // store keys in flatContent, not in the content object
       let flatContent: Array<{ key: string; value: string }> = [];
-      let sourceFormat: JsonFormat = { indent: "  ", trailingNewline: true };
+      let sourceFormat: JsonFormat = { indent: "  ", trailingNewline: true, keyStructure: "nested" };
 
       for (const fileData of sourceFilesData) {
         flatContent = flatContent.concat(fileData.flatContent);
@@ -467,10 +462,6 @@ export function registerSyncTranslations(server: McpServer): void {
       }
 
       const sourceKeys = new Set(flatContent.map((item) => item.key));
-
-      // Read cache and detect local delta
-      const cachedContent = await readSyncCache(projectPath, input.source_lang);
-      const localDelta = detectLocalDelta(flatContent, cachedContent);
 
       // Detect missing target languages (files that don't exist yet)
       const missingLanguages: string[] = [];
@@ -516,9 +507,36 @@ export function registerSyncTranslations(server: McpServer): void {
             continue;
           }
 
-          // Check if file exists
+          // Check if file exists and has all source keys
           try {
-            await readFile(targetFilePath, "utf-8");
+            const targetContent = await readFile(targetFilePath, "utf-8");
+            const sourceFileKeys = new Set(sourceFileData.flatContent.map((item) => item.key));
+            let existingKeys = new Set<string>();
+
+            // Use appropriate parser based on source file type
+            if (sourceFileData.appleType === "strings") {
+              const parsed = parseStringsContent(targetContent);
+              existingKeys = new Set(
+                parsed.entries.filter(e => e.value && e.value.trim() !== "").map(e => e.key)
+              );
+            } else if (sourceFileData.appleType === "stringsdict") {
+              const parsed = parseStringsDictContent(targetContent);
+              if (parsed) {
+                existingKeys = new Set(parsed.entries.map(e => e.key));
+              }
+            } else {
+              // JSON/ARB files
+              const parsed = parseJsonWithFormat(targetContent);
+              if (parsed) {
+                const flatTarget = flattenJson(parsed.data as Record<string, unknown>);
+                existingKeys = new Set(flatTarget.map((item) => item.key));
+              }
+            }
+
+            const hasMissingKeys = [...sourceFileKeys].some((key) => !existingKeys.has(key));
+            if (hasMissingKeys && !languagesWithMissingFiles.includes(targetLang)) {
+              languagesWithMissingFiles.push(targetLang);
+            }
           } catch {
             // File doesn't exist - this language has missing files
             if (!languagesWithMissingFiles.includes(targetLang)) {
@@ -528,8 +546,9 @@ export function registerSyncTranslations(server: McpServer): void {
         }
       }
 
-      // If no content to sync AND no missing languages AND no missing files, return early
-      if (localDelta.contentToSync.length === 0 && missingLanguages.length === 0 && languagesWithMissingFiles.length === 0) {
+      // If no missing languages AND no languages with missing files, return early
+      // (This means all target files exist and have all source keys)
+      if (missingLanguages.length === 0 && languagesWithMissingFiles.length === 0) {
         if (input.dry_run) {
           // Check for extra keys in target files even in dry_run mode
           let totalExtraKeys = 0;
@@ -666,8 +685,6 @@ export function registerSyncTranslations(server: McpServer): void {
           }
         }
 
-        await writeSyncCache(projectPath, input.source_lang, flatContent);
-
         const filesCleanedCount = results.filter((r) => r.keys_removed && r.keys_removed > 0).length;
         const totalKeysRemoved = results.reduce((sum, r) => sum + (r.keys_removed || 0), 0);
 
@@ -725,14 +742,12 @@ export function registerSyncTranslations(server: McpServer): void {
       const completedFiles: string[] = [];
       const allFilesWritten: string[] = [];
 
+      // Track all unique keys being synced (for dry_run response)
+      const allKeysToSync = new Set<string>();
+
       // Process each source file
       for (const sourceFileData of sourceFilesData) {
         const sourceFileKeys = new Set(sourceFileData.flatContent.map((item) => item.key));
-
-        // Filter delta content to only keys in this source file
-        const fileKeysInDelta = localDelta.contentToSync.filter(
-          (item) => sourceFileKeys.has(item.key)
-        );
 
         // Determine which languages need this file's translations
         // and what content to sync per language
@@ -749,16 +764,12 @@ export function registerSyncTranslations(server: McpServer): void {
           // Handle xcstrings files specially (same file for all languages)
           if (sourceFileData.appleType === "xcstrings" && sourceFileData.xcstringsData) {
             const isMissingLang = missingLanguages.includes(targetLang);
-            const targetHasMissingKeys = languagesWithMissingFiles.includes(targetLang);
             const skipSet = getSkipKeysForLang(input.skip_keys, targetLang);
 
             const { contentToSync, skippedKeys } = getXCStringsContentToSync(
               { file: sourceFileData.file, flatContent: sourceFileData.flatContent, xcstringsData: sourceFileData.xcstringsData },
               targetLang,
-              cachedContent,
-              fileKeysInDelta,
               isMissingLang,
-              targetHasMissingKeys,
               skipSet,
               input.hard_sync
             );
@@ -771,6 +782,10 @@ export function registerSyncTranslations(server: McpServer): void {
 
             if (contentToSync.length > 0) {
               langContentMap.set(targetLang, contentToSync);
+              // Track keys for dry_run response
+              for (const item of contentToSync) {
+                allKeysToSync.add(item.key);
+              }
             }
             continue;
           }
@@ -829,25 +844,14 @@ export function registerSyncTranslations(server: McpServer): void {
           // Determine what content to sync
           let contentToSync: Array<{ key: string; value: string }>;
 
-          if (isMissingLang || !targetFileExists) {
-            // New language or missing file: sync all keys from this source file
+          if (input.hard_sync || isMissingLang || !targetFileExists) {
+            // Hard sync, new language, or missing file: sync all keys from this source file
             contentToSync = sourceFileData.flatContent;
-          } else if (!cachedContent) {
-            // No cache: sync only keys missing from target
+          } else {
+            // Existing target: sync only keys missing from target
             contentToSync = sourceFileData.flatContent.filter(
               (item) => !existingTargetKeys.has(item.key)
             );
-          } else {
-            // Has cache: use delta, but only keys from this file
-            if (input.hard_sync) {
-              // Hard sync: re-translate all changed keys
-              contentToSync = fileKeysInDelta;
-            } else {
-              // Normal sync: only keys missing from target
-              contentToSync = fileKeysInDelta.filter(
-                (item) => !existingTargetKeys.has(item.key)
-              );
-            }
           }
 
           // Apply skip_keys filter
@@ -869,6 +873,10 @@ export function registerSyncTranslations(server: McpServer): void {
 
           if (filteredContent.length > 0) {
             langContentMap.set(targetLang, filteredContent);
+            // Track keys for dry_run response
+            for (const item of filteredContent) {
+              allKeysToSync.add(item.key);
+            }
           }
         }
 
@@ -879,16 +887,16 @@ export function registerSyncTranslations(server: McpServer): void {
         }
 
         // Collect all unique keys to sync for this file (union across all languages)
-        const allKeysToSync = new Set<string>();
+        const fileKeysToSync = new Set<string>();
         for (const content of langContentMap.values()) {
           for (const item of content) {
-            allKeysToSync.add(item.key);
+            fileKeysToSync.add(item.key);
           }
         }
 
         // Get source content for these keys
         const contentForApi = sourceFileData.flatContent.filter(
-          (item) => allKeysToSync.has(item.key)
+          (item) => fileKeysToSync.has(item.key)
         );
 
         if (contentForApi.length === 0) {
@@ -969,6 +977,16 @@ export function registerSyncTranslations(server: McpServer): void {
           for (const result of response.results) {
             const targetLang = result.language;
 
+            // Filter translations to only keys this language actually needed
+            // This prevents overwriting existing translations when syncing multiple languages
+            const keysNeededForLang = langContentMap.get(targetLang);
+            const keysNeededSet = keysNeededForLang
+              ? new Set(keysNeededForLang.map(item => item.key))
+              : new Set<string>();
+            const translationsForLang = result.translations.filter(
+              t => keysNeededSet.has(t.key)
+            );
+
             // Always compute target path from source (no namespace matching!)
             const targetFilePath = computeTargetFilePath(
               sourceFileData.file.path,
@@ -1003,7 +1021,7 @@ export function registerSyncTranslations(server: McpServer): void {
 
                 const fileContent = mergeStringsContent(
                   existingContent,
-                  result.translations,
+                  translationsForLang,
                   sourceFileData.stringsContent?.comments || new Map(),
                   sourceFileKeys
                 );
@@ -1021,7 +1039,7 @@ export function registerSyncTranslations(server: McpServer): void {
                   sourceFileData.file.path,
                   sourceFileData.xcstringsData,
                   targetLang,
-                  result.translations
+                  translationsForLang
                 );
 
                 if (!allFilesWritten.includes(sourceFileData.file.path)) {
@@ -1043,7 +1061,7 @@ export function registerSyncTranslations(server: McpServer): void {
 
                 const fileContent = mergeStringsDictContent(
                   existingContent,
-                  result.translations,
+                  translationsForLang,
                   sourceFileData.stringsDictEntries,
                   sourceFileKeys
                 );
@@ -1075,16 +1093,32 @@ export function registerSyncTranslations(server: McpServer): void {
                   // ARB file: merge with existing, preserve metadata, update locale
                   mergedContent = mergeArbContent(
                     existingContent,
-                    result.translations,
+                    translationsForLang,
                     sourceFileData.arbMetadata,
                     sourceFileKeys,
                     targetLang
                   );
                 } else {
                   // Regular JSON: merge and remove extra keys
-                  const newTranslations = unflattenJson(result.translations);
-                  mergedContent = deepMerge(existingContent, newTranslations);
-                  mergedContent = removeExtraKeys(mergedContent, sourceFileKeys);
+                  // Check if source uses flat keys (keys containing dots at root level)
+                  if (sourceFileData.format.keyStructure === "flat") {
+                    // For flat key structure, keep translations flat (don't unflatten)
+                    mergedContent = { ...existingContent };
+                    for (const { key, value } of translationsForLang) {
+                      mergedContent[key] = value;
+                    }
+                    // Remove keys not in source
+                    for (const key of Object.keys(mergedContent)) {
+                      if (!sourceFileKeys.has(key)) {
+                        delete mergedContent[key];
+                      }
+                    }
+                  } else {
+                    // For nested key structure, unflatten and deep merge
+                    const newTranslations = unflattenJson(translationsForLang);
+                    mergedContent = deepMerge(existingContent, newTranslations);
+                    mergedContent = removeExtraKeys(mergedContent, sourceFileKeys);
+                  }
                 }
 
                 // Write file
@@ -1110,20 +1144,16 @@ export function registerSyncTranslations(server: McpServer): void {
         }
       }
 
-      // Update cache after all files processed
-      if (input.write_to_files && !input.dry_run) {
-        await writeSyncCache(projectPath, input.source_lang, flatContent);
-      }
-
       // Build final response
       if (input.dry_run) {
+        const keysToSyncArray = Array.from(allKeysToSync);
         const output: SyncPreviewOutput = {
           success: true,
           dry_run: true,
           delta: {
-            new_keys: localDelta.newKeys,
-            changed_keys: localDelta.changedKeys,
-            total_keys_to_sync: localDelta.contentToSync.length,
+            new_keys: keysToSyncArray,
+            changed_keys: [],
+            total_keys_to_sync: keysToSyncArray.length,
           },
           cost: {
             words_to_translate: totalWordsToTranslate,
@@ -1131,7 +1161,7 @@ export function registerSyncTranslations(server: McpServer): void {
             current_balance: currentBalance,
             balance_after_sync: currentBalance - totalCreditsUsed,
           },
-          message: `Preview: ${localDelta.contentToSync.length} keys to sync across ${sourceFilesData.length} file(s), ${totalCreditsUsed} credits required. Run with dry_run=false to execute.`,
+          message: `Preview: ${keysToSyncArray.length} keys to sync across ${sourceFilesData.length} file(s), ${totalCreditsUsed} credits required. Run with dry_run=false to execute.`,
         };
         return {
           content: [{ type: "text", text: JSON.stringify(output, null, 2) }],

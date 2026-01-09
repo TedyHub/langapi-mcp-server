@@ -20,12 +20,13 @@ This package enables AI assistants like Claude, Cursor, and VS Code extensions t
 
 ## Features
 
-- **Locale Detection**: Automatically detect i18n framework (next-intl, i18next, react-intl) and locale files
+- **Locale Detection**: Automatically detect i18n framework (next-intl, i18next, react-intl, iOS/macOS) and locale files
 - **Translation Status**: Compare source and target locales to find missing translations
 - **Sync Translations**: Translate missing keys via LangAPI with credit-based billing
 - **Dry Run Mode**: Preview changes and costs before syncing (enabled by default)
 - **Format Preservation**: Maintains JSON formatting when writing translated files
 - **Delta Detection**: Only translate new/changed keys, saving up to 90% on costs
+- **Apple Localization**: Support for iOS/macOS `.strings`, `.xcstrings`, and `.stringsdict` files
 
 ## Installation
 
@@ -301,8 +302,7 @@ Compare source locale against targets to identify missing keys and estimate cost
 {
   "source_lang": "en",
   "target_langs": ["de", "fr"],        // optional, all non-source by default
-  "project_path": "/path/to/project",  // optional
-  "app_id": "your-app-id"              // optional, for accurate cost estimate
+  "project_path": "/path/to/project"   // optional
 }
 ```
 
@@ -380,37 +380,6 @@ Sync translations via the LangAPI API. **Default is dry_run=true for safety.**
 }
 ```
 
-### `get_diff`
-
-Compare current source locale against the last synced version.
-
-**Input:**
-```json
-{
-  "source_lang": "en",
-  "project_path": "/path/to/project"   // optional
-}
-```
-
-**Output:**
-```json
-{
-  "has_changes": true,
-  "summary": {
-    "new_keys": 3,
-    "changed_keys": 1,
-    "removed_keys": 0,
-    "unchanged_keys": 146
-  },
-  "diff": {
-    "new": ["feature.title", "feature.description", "feature.cta"],
-    "changed": ["home.welcome"],
-    "removed": [],
-    "unchanged": ["..."]
-  }
-}
-```
-
 ---
 
 ## Prompt Examples
@@ -459,8 +428,6 @@ Compare current source locale against the last synced version.
 ### Advanced Operations
 
 ```
-"What changed since my last sync?"
-"Show diff between current and last synced version"
 "Are there any extra keys in German that aren't in English?"
 "Skip the settings.* keys when syncing"
 "Only sync the home.* and nav.* keys"
@@ -502,6 +469,7 @@ The server automatically detects these i18n frameworks:
 | **next-intl** | `messages/*.json`, `locales/*.json` | `i18n.ts`, `next.config.js` |
 | **i18next** | `public/locales/*/*.json`, `locales/*/*.json` | `i18next.config.js`, `i18n.js` |
 | **react-intl** | `src/lang/*.json`, `lang/*.json` | `src/i18n.ts` |
+| **iOS/macOS** | `.strings`, `.xcstrings`, `.stringsdict` | `Info.plist` |
 | **generic** | Various common patterns | - |
 
 ---

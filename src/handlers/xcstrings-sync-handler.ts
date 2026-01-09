@@ -94,31 +94,25 @@ export function xcstringsHasMissingKeys(
  *
  * @param sourceData Parsed xcstrings source data
  * @param targetLang Target language code
- * @param cachedContent Cached content from previous sync (null if no cache)
- * @param deltaContent Content that changed since last sync
  * @param isMissingLang Whether the target language is completely missing
- * @param hasMissingKeys Whether target has any missing keys
  * @param skipKeys Set of keys to skip for this language
- * @param hardSync If true, re-translate all changed keys even if target already has translations
+ * @param hardSync If true, re-translate all keys even if target already has translations
  * @returns Content to sync (after filtering skip keys)
  */
 export function getXCStringsContentToSync(
   sourceData: XCStringsSourceData,
   targetLang: string,
-  cachedContent: Record<string, string> | null,
-  deltaContent: KeyValue[],
   isMissingLang: boolean,
-  hasMissingKeys: boolean,
   skipKeys: Set<string>,
   hardSync: boolean = false
 ): { contentToSync: KeyValue[]; skippedKeys: string[] } {
   let contentToSync: KeyValue[];
 
-  if (isMissingLang) {
-    // New language: sync all source content
+  if (hardSync || isMissingLang) {
+    // Hard sync or new language: sync all source content
     contentToSync = sourceData.flatContent;
-  } else if (!cachedContent || hasMissingKeys) {
-    // No cache OR target has missing translations: sync missing keys
+  } else {
+    // Existing language: sync only keys missing from target
     const existingTargetKeys = getXCStringsExistingKeys(
       sourceData.xcstringsData,
       targetLang
@@ -126,21 +120,6 @@ export function getXCStringsContentToSync(
     contentToSync = sourceData.flatContent.filter(
       (item) => !existingTargetKeys.has(item.key)
     );
-  } else {
-    // Has cache: use delta
-    if (hardSync) {
-      // Hard sync: re-translate all changed keys
-      contentToSync = deltaContent;
-    } else {
-      // Normal sync: only keys missing from target
-      const existingTargetKeys = getXCStringsExistingKeys(
-        sourceData.xcstringsData,
-        targetLang
-      );
-      contentToSync = deltaContent.filter(
-        (item) => !existingTargetKeys.has(item.key)
-      );
-    }
   }
 
   // Apply skip_keys filter

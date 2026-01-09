@@ -9,7 +9,6 @@
  * - list_local_locales: Scan project for locale files
  * - get_translation_status: Compare source vs target locales
  * - sync_translations: Sync translations via LangAPI API
- * - get_diff: Compare source against sync cache for delta detection
  */
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
