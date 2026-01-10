@@ -1,0 +1,17 @@
+{
+  "app.name": "My Application",
+  "app.tagline": "Build something amazing",
+  "auth.login": "Log in",
+  "auth.logout": "Log out",
+  "auth.signup": "Sign up",
+  "auth.forgot_password": "Forgot password?",
+  "common.save": "Save",
+  "common.cancel": "Cancel",
+  "common.delete": "Delete",
+  "common.loading": "Loading...",
+  "errors.not_found": "Page not found",
+  "errors.server_error": "Something went wrong",
+  "variables.greeting": "Welcome, {name}!",
+  "variables.itemCount": "You have {count} items",
+  "variables.lastLogin": "Last login: {date}"
+}

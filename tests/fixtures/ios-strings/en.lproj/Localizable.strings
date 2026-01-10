@@ -1,0 +1,24 @@
+/* App section */
+"app.name" = "My Application";
+"app.tagline" = "Build something amazing";
+
+/* Auth section */
+"auth.login" = "Log in";
+"auth.logout" = "Log out";
+"auth.signup" = "Sign up";
+"auth.forgot_password" = "Forgot password?";
+
+/* Common section */
+"common.save" = "Save";
+"common.cancel" = "Cancel";
+"common.delete" = "Delete";
+"common.loading" = "Loading...";
+
+/* Errors section */
+"errors.not_found" = "Page not found";
+"errors.server_error" = "Something went wrong";
+
+/* Variables section */
+"variables.greeting" = "Welcome, %@!";
+"variables.item_count" = "You have %d items";
+"variables.last_login" = "Last login: %@";

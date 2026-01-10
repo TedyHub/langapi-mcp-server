@@ -1,0 +1,9 @@
+{
+  "app": {
+    "name": "Meine Anwendung"
+  },
+  "auth": {
+    "login": "Anmelden",
+    "logout": "Abmelden"
+  }
+}

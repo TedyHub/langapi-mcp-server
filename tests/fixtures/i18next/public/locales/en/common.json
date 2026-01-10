@@ -1,0 +1,11 @@
+{
+  "app_name": "My Application",
+  "app_tagline": "Build something amazing",
+  "save": "Save",
+  "cancel": "Cancel",
+  "delete": "Delete",
+  "loading": "Loading...",
+  "greeting": "Welcome, {{name}}!",
+  "item_count": "You have {{count}} items",
+  "last_login": "Last login: {{date}}"
+}

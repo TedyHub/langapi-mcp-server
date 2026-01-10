@@ -1,0 +1,78 @@
+{
+  "@@locale": "en",
+  "appName": "My Application",
+  "@appName": {
+    "description": "The application name"
+  },
+  "appTagline": "Build something amazing",
+  "@appTagline": {
+    "description": "The application tagline"
+  },
+  "authLogin": "Log in",
+  "@authLogin": {
+    "description": "Login button text"
+  },
+  "authLogout": "Log out",
+  "@authLogout": {
+    "description": "Logout button text"
+  },
+  "authSignup": "Sign up",
+  "@authSignup": {
+    "description": "Sign up button text"
+  },
+  "authForgotPassword": "Forgot password?",
+  "@authForgotPassword": {
+    "description": "Forgot password link text"
+  },
+  "commonSave": "Save",
+  "@commonSave": {
+    "description": "Save button text"
+  },
+  "commonCancel": "Cancel",
+  "@commonCancel": {
+    "description": "Cancel button text"
+  },
+  "commonDelete": "Delete",
+  "@commonDelete": {
+    "description": "Delete button text"
+  },
+  "commonLoading": "Loading...",
+  "@commonLoading": {
+    "description": "Loading indicator text"
+  },
+  "errorsNotFound": "Page not found",
+  "@errorsNotFound": {
+    "description": "404 error message"
+  },
+  "errorsServerError": "Something went wrong",
+  "@errorsServerError": {
+    "description": "Generic server error message"
+  },
+  "variablesGreeting": "Welcome, {name}!",
+  "@variablesGreeting": {
+    "description": "Greeting with user name",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "variablesItemCount": "You have {count} items",
+  "@variablesItemCount": {
+    "description": "Item count message",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "variablesLastLogin": "Last login: {date}",
+  "@variablesLastLogin": {
+    "description": "Last login date",
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  }
+}

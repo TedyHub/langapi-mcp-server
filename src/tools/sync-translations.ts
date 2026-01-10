@@ -1206,3 +1206,12 @@ export function registerSyncTranslations(server: McpServer): void {
     }
   );
 }
+
+// Export helper functions for testing
+export {
+  computeTargetFilePath,
+  deepMerge,
+  removeExtraKeys,
+  removeKeysFromObject,
+  getSkipKeysForLang,
+};

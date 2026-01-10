@@ -1,0 +1,7 @@
+/* App section */
+"app.name" = "Meine Anwendung";
+"app.tagline" = "Erstelle etwas Erstaunliches";
+
+/* Auth section */
+"auth.login" = "Anmelden";
+"auth.logout" = "Abmelden";
