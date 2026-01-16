@@ -9,7 +9,11 @@ export interface KeyValue {
   value: string;
 }
 
+// Precision level for sync operations
+export type SyncPrecision = "standard" | "extra";
+
 // Sync request body
+// Note: precision is not included here - endpoint selection (/sync vs /extra-sync) handles this
 export interface SyncRequest {
   source_lang: string;
   target_langs: string[];

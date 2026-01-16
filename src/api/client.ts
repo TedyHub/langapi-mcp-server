@@ -84,12 +84,30 @@ export class LangAPIClient {
    * Sync translations with the LangAPI service
    */
   async sync(request: SyncRequest): Promise<SyncResponse> {
+    return this.callSyncEndpoint(`${this.baseUrl}/api/v1/sync`, request);
+  }
+
+  /**
+   * Sync translations with extra precision using the LangAPI service
+   * Uses the /api/v1/extra-sync endpoint for higher quality translations (2 credits/word)
+   */
+  async extraSync(request: SyncRequest): Promise<SyncResponse> {
+    return this.callSyncEndpoint(`${this.baseUrl}/api/v1/extra-sync`, request);
+  }
+
+  /**
+   * Internal method to call sync endpoints
+   */
+  private async callSyncEndpoint(
+    url: string,
+    request: SyncRequest
+  ): Promise<SyncResponse> {
     // Create abort controller for timeout
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
-      const response = await fetch(`${this.baseUrl}/api/v1/sync`, {
+      const response = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

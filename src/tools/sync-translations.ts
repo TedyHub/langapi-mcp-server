@@ -84,6 +84,12 @@ const SyncTranslationsSchema = z.object({
     .describe(
       "If true, re-translate all changed keys even if target already has translations. If false (default), only translate keys missing in target."
     ),
+  precision: z
+    .enum(["standard", "extra"])
+    .default("standard")
+    .describe(
+      "Translation precision level. 'standard' uses 1 credit/word. 'extra' provides more precise translation at 2 credits/word."
+    ),
 });
 
 export type SyncTranslationsInput = z.infer<typeof SyncTranslationsSchema>;
@@ -314,7 +320,7 @@ function computeTargetFilePath(
 export function registerSyncTranslations(server: McpServer): void {
   server.tool(
     "sync_translations",
-    "Add new languages or sync existing translations via LangAPI. Use this tool to: (1) ADD translations for new languages like Czech, Spanish, French - creates new locale files automatically, (2) SYNC existing translations when source content changes. Supports any valid language code (e.g., 'cs' for Czech, 'de' for German). Default is dry_run=true for preview.",
+    "Add new languages or sync existing translations via LangAPI. Use this tool to: (1) ADD translations for new languages like Czech, Spanish, French - creates new locale files automatically, (2) SYNC existing translations when source content changes. Supports any valid language code (e.g., 'cs' for Czech, 'de' for German). Default is dry_run=true for preview. Use precision='extra' for more precise translations at 2 credits/word (default 'standard' is 1 credit/word).",
     SyncTranslationsSchema.shape,
     async (args): Promise<{ content: Array<{ type: "text"; text: string }> }> => {
       const input = SyncTranslationsSchema.parse(args);
@@ -907,12 +913,15 @@ export function registerSyncTranslations(server: McpServer): void {
         // Make API call for this file → all languages that need it
         const langsNeedingSync = Array.from(langContentMap.keys());
 
-        const response = await client.sync({
+        const syncRequest = {
           source_lang: input.source_lang,
           target_langs: langsNeedingSync,
           content: contentForApi,
           dry_run: input.dry_run,
-        });
+        };
+        const response = input.precision === "extra"
+          ? await client.extraSync(syncRequest)
+          : await client.sync(syncRequest);
 
         // Handle API error
         if (!response.success) {
@@ -1161,7 +1170,7 @@ export function registerSyncTranslations(server: McpServer): void {
             current_balance: currentBalance,
             balance_after_sync: currentBalance - totalCreditsUsed,
           },
-          message: `Preview: ${keysToSyncArray.length} keys to sync across ${sourceFilesData.length} file(s), ${totalCreditsUsed} credits required. Run with dry_run=false to execute.`,
+          message: `Preview: ${keysToSyncArray.length} keys to sync across ${sourceFilesData.length} file(s), ${totalCreditsUsed} credits required${input.precision === "extra" ? " (extra precision: 2 credits/word)" : ""}. Run with dry_run=false to execute.`,
         };
         return {
           content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
@@ -1198,7 +1207,7 @@ export function registerSyncTranslations(server: McpServer): void {
           credits_used: totalCreditsUsed,
           balance_after_sync: currentBalance,
         },
-        message: `Sync complete. ${totalTranslated} keys translated across ${input.target_langs.length} languages.${skippedMsg}`,
+        message: `Sync complete${input.precision === "extra" ? " (extra precision)" : ""}. ${totalTranslated} keys translated across ${input.target_langs.length} languages.${skippedMsg}`,
       };
       return {
         content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
