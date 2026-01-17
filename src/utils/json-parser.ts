@@ -20,19 +20,23 @@ export function flattenJson(
   for (const [key, value] of Object.entries(obj)) {
     const fullKey = prefix ? `${prefix}.${key}` : key;
 
-    if (
-      typeof value === "object" &&
-      value !== null &&
-      !Array.isArray(value)
-    ) {
+    if (Array.isArray(value)) {
+      // Flatten array elements with numeric indices
+      for (let i = 0; i < value.length; i++) {
+        const item = value[i];
+        const arrayKey = `${fullKey}.${i}`;
+        if (typeof item === "object" && item !== null) {
+          result.push(...flattenJson(item as Record<string, unknown>, arrayKey));
+        } else {
+          result.push({ key: arrayKey, value: String(item) });
+        }
+      }
+    } else if (typeof value === "object" && value !== null) {
       // Recursively flatten nested objects
       result.push(...flattenJson(value as Record<string, unknown>, fullKey));
     } else {
-      // Convert value to string
-      result.push({
-        key: fullKey,
-        value: String(value),
-      });
+      // Convert primitive value to string
+      result.push({ key: fullKey, value: String(value) });
     }
   }
 
@@ -51,17 +55,33 @@ export function unflattenJson(items: KeyValue[]): Record<string, unknown> {
 
   for (const { key, value } of items) {
     const parts = key.split(".");
-    let current: Record<string, unknown> = result;
+    let current: Record<string, unknown> | unknown[] = result;
 
     for (let i = 0; i < parts.length - 1; i++) {
       const part = parts[i];
-      if (!(part in current)) {
-        current[part] = {};
+      const nextPart = parts[i + 1];
+      const nextIsIndex = /^\d+$/.test(nextPart);
+
+      if (Array.isArray(current)) {
+        const index = parseInt(part, 10);
+        if (current[index] === undefined) {
+          current[index] = nextIsIndex ? [] : {};
+        }
+        current = current[index] as Record<string, unknown> | unknown[];
+      } else {
+        if (!(part in current)) {
+          current[part] = nextIsIndex ? [] : {};
+        }
+        current = current[part] as Record<string, unknown> | unknown[];
       }
-      current = current[part] as Record<string, unknown>;
     }
 
-    current[parts[parts.length - 1]] = value;
+    const lastPart = parts[parts.length - 1];
+    if (Array.isArray(current)) {
+      current[parseInt(lastPart, 10)] = value;
+    } else {
+      current[lastPart] = value;
+    }
   }
 
   return result;
@@ -74,11 +94,16 @@ export function countKeys(obj: Record<string, unknown>): number {
   let count = 0;
 
   for (const value of Object.values(obj)) {
-    if (
-      typeof value === "object" &&
-      value !== null &&
-      !Array.isArray(value)
-    ) {
+    if (Array.isArray(value)) {
+      // Count array elements recursively
+      for (const item of value) {
+        if (typeof item === "object" && item !== null) {
+          count += countKeys(item as Record<string, unknown>);
+        } else {
+          count++;
+        }
+      }
+    } else if (typeof value === "object" && value !== null) {
       count += countKeys(value as Record<string, unknown>);
     } else {
       count++;

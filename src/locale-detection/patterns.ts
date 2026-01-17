@@ -102,6 +102,12 @@ export const FRAMEWORK_PATTERNS: Record<string, FrameworkPattern> = {
   generic: {
     configFiles: [],
     localeGlobs: [
+      // Patterns for when projectPath IS the locales folder
+      "*.json", // flat: en.json at root
+      "*/*.json", // nested: en/common.json, en/home.json
+      "*.arb", // Flutter flat at root
+      "*/*.arb", // Flutter nested at root
+      // Standard patterns
       "locales/*.json",
       "translations/*.json",
       "i18n/*.json",
