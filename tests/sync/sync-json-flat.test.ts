@@ -12,6 +12,11 @@ const mockFetch = vi.fn();
 
 vi.stubGlobal("fetch", mockFetch);
 
+// Mock the delay utility to avoid waiting in tests
+vi.mock("../../src/utils/delay.js", () => ({
+  delay: vi.fn(() => Promise.resolve()),
+}));
+
 // Mock the env module
 vi.mock("../../src/config/env.js", () => ({
   API_BASE_URL: "https://mock.langapi.io",

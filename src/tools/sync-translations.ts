@@ -25,6 +25,7 @@ import {
   type JsonFormat,
 } from "../utils/format-preserve.js";
 import { LangAPIClient } from "../api/client.js";
+import { delay } from "../utils/delay.js";
 import { isApiKeyConfigured } from "../config/env.js";
 import {
   languageCodeSchema,
@@ -728,6 +729,7 @@ export function registerSyncTranslations(server: McpServer): void {
       // 3. Write to corresponding target files
       // This ensures correct file mapping without namespace matching bugs
 
+      let isFirstApiCall = true;
       let totalCreditsUsed = 0;
       let totalWordsToTranslate = 0;
       let currentBalance = 0;
@@ -910,39 +912,62 @@ export function registerSyncTranslations(server: McpServer): void {
           continue;
         }
 
-        // Make API call for this file → all languages that need it
+        // Make one API call per language (with 1s delay between calls)
         const langsNeedingSync = Array.from(langContentMap.keys());
 
-        const syncRequest = {
-          source_lang: input.source_lang,
-          target_langs: langsNeedingSync,
-          content: contentForApi,
-          dry_run: input.dry_run,
-        };
-        const response = input.precision === "extra"
-          ? await client.extraSync(syncRequest)
-          : await client.sync(syncRequest);
+        for (let langIdx = 0; langIdx < langsNeedingSync.length; langIdx++) {
+          const lang = langsNeedingSync[langIdx];
 
-        // Handle API error
-        if (!response.success) {
-          // Return partial error with info about completed files
-          if (completedFiles.length > 0) {
-            const completedLangs = Array.from(langResults.entries())
-              .filter(([_, r]) => r.translated_count > 0 || r.files_written.length > 0)
-              .map(([lang]) => lang);
+          if (!isFirstApiCall) {
+            await delay(1000);
+          }
+          isFirstApiCall = false;
 
-            const output: SyncPartialErrorOutput = {
+          const syncRequest = {
+            source_lang: input.source_lang,
+            target_langs: [lang],
+            content: contentForApi,
+            dry_run: input.dry_run,
+          };
+          const response = input.precision === "extra"
+            ? await client.extraSync(syncRequest)
+            : await client.sync(syncRequest);
+
+          // Handle API error
+          if (!response.success) {
+            // Return partial error with info about completed files
+            if (completedFiles.length > 0 || langIdx > 0) {
+              const completedLangs = Array.from(langResults.entries())
+                .filter(([_, r]) => r.translated_count > 0 || r.files_written.length > 0)
+                .map(([lang]) => lang);
+
+              const output: SyncPartialErrorOutput = {
+                success: false,
+                partial_results: {
+                  languages_completed: completedLangs,
+                  files_written: allFilesWritten,
+                  credits_used: totalCreditsUsed,
+                },
+                error: {
+                  code: response.error.code,
+                  message: response.error.message,
+                  failed_language: lang,
+                  remaining_languages: langsNeedingSync.slice(langIdx + 1),
+                  current_balance: response.error.currentBalance,
+                  required_credits: response.error.requiredCredits,
+                  top_up_url: response.error.topUpUrl,
+                },
+              };
+              return {
+                content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
+              };
+            }
+
+            const output: SyncErrorOutput = {
               success: false,
-              partial_results: {
-                languages_completed: completedLangs,
-                files_written: allFilesWritten,
-                credits_used: totalCreditsUsed,
-              },
               error: {
                 code: response.error.code,
                 message: response.error.message,
-                failed_language: langsNeedingSync[0],
-                remaining_languages: langsNeedingSync,
                 current_balance: response.error.currentBalance,
                 required_credits: response.error.requiredCredits,
                 top_up_url: response.error.topUpUrl,
@@ -953,38 +978,22 @@ export function registerSyncTranslations(server: McpServer): void {
             };
           }
 
-          const output: SyncErrorOutput = {
-            success: false,
-            error: {
-              code: response.error.code,
-              message: response.error.message,
-              current_balance: response.error.currentBalance,
-              required_credits: response.error.requiredCredits,
-              top_up_url: response.error.topUpUrl,
-            },
-          };
-          return {
-            content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
-          };
-        }
+          // Handle dry run response - accumulate costs
+          if ("delta" in response && response.cost) {
+            totalWordsToTranslate += response.cost.wordsToTranslate || 0;
+            totalCreditsUsed += response.cost.creditsRequired || 0;
+            currentBalance = response.cost.currentBalance || 0;
+            continue;
+          }
 
-        // Handle dry run response - accumulate costs
-        if ("delta" in response && response.cost) {
-          totalWordsToTranslate += response.cost.wordsToTranslate || 0;
-          totalCreditsUsed += response.cost.creditsRequired || 0;
-          currentBalance = response.cost.currentBalance || 0;
-          completedFiles.push(sourceFileData.file.path);
-          continue;
-        }
+          // Handle execute response - write files
+          if ("results" in response && response.cost) {
+            totalCreditsUsed += response.cost.creditsUsed || 0;
+            currentBalance = response.cost.balanceAfterSync || 0;
 
-        // Handle execute response - write files
-        if ("results" in response && response.cost) {
-          totalCreditsUsed += response.cost.creditsUsed || 0;
-          currentBalance = response.cost.balanceAfterSync || 0;
-
-          // Write translations for each language
-          for (const result of response.results) {
-            const targetLang = result.language;
+            // Write translations for the single language result
+            for (const result of response.results) {
+              const targetLang = result.language;
 
             // Filter translations to only keys this language actually needed
             // This prevents overwriting existing translations when syncing multiple languages
@@ -1148,9 +1157,10 @@ export function registerSyncTranslations(server: McpServer): void {
               langResult.translated_count += result.translatedCount;
             }
           }
-
-          completedFiles.push(sourceFileData.file.path);
+          }
         }
+
+        completedFiles.push(sourceFileData.file.path);
       }
 
       // Build final response

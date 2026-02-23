@@ -9,6 +9,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { detectLocales } from "../locale-detection/index.js";
 import { getAllKeys, parseJsonSafe, flattenJson } from "../utils/json-parser.js";
 import { LangAPIClient } from "../api/client.js";
+import { delay } from "../utils/delay.js";
 import { isXCStringsFile } from "../utils/apple-common.js";
 import { parseXCStringsContent, extractLocaleFromXCStrings } from "../utils/xcstrings-parser.js";
 import { languageCodeSchema } from "../utils/validation.js";
@@ -242,20 +243,33 @@ export function registerGetTranslationStatus(server: McpServer): void {
             missingKeySet.has(item.key)
           );
 
-          const response = await client.sync({
-            source_lang: input.source_lang,
-            target_langs: targetLangs,
-            content: itemsToTranslate,
-            dry_run: true,
-          });
+          // Make one API call per language (with 1s delay between calls)
+          let serverBalance: number | undefined;
+          let isFirstCall = true;
+          for (const lang of targetLangs) {
+            if (!isFirstCall) {
+              await delay(1000);
+            }
+            isFirstCall = false;
 
-          if (response.success && "delta" in response) {
-            // Use server's balance info, but keep our accurate local cost estimate
+            const response = await client.sync({
+              source_lang: input.source_lang,
+              target_langs: [lang],
+              content: itemsToTranslate,
+              dry_run: true,
+            });
+
+            if (response.success && "delta" in response) {
+              serverBalance = response.cost.currentBalance;
+            }
+          }
+
+          if (serverBalance !== undefined) {
             costEstimate = {
               words_to_translate: totalWordsToTranslate,
               credits_required: creditsRequired,
-              current_balance: response.cost.currentBalance,
-              balance_after_sync: response.cost.currentBalance - creditsRequired,
+              current_balance: serverBalance,
+              balance_after_sync: serverBalance - creditsRequired,
             };
           }
         } catch {
