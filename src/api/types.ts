@@ -82,3 +82,32 @@ export interface AccountStatusResponse {
 export type AccountStatusResult =
   | AccountStatusResponse
   | { success: false; error: { code: string; message: string } };
+
+export interface GlossaryTermDto {
+  _id: string;
+  sourceLang: string;
+  sourceText: string;
+  targetLang: string;
+  targetText: string;
+  caseSensitive: boolean;
+}
+
+export interface AddGlossaryTermRequest {
+  sourceLang: string;
+  sourceText: string;
+  targetLang: string;
+  targetText: string;
+  caseSensitive?: boolean;
+}
+
+export type GlossaryListResult =
+  | { success: true; data: GlossaryTermDto[] }
+  | { success: false; error: { code: string; message: string } };
+
+export type GlossaryAddResult =
+  | { success: true; data: GlossaryTermDto }
+  | { success: false; error: { code: string; message: string } };
+
+export type GlossaryDeleteResult =
+  | { success: true }
+  | { success: false; error: { code: string; message: string } };

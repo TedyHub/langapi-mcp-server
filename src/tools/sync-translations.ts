@@ -9,7 +9,7 @@
  */
 
 import { z } from "zod";
-import { readFile, writeFile, mkdir } from "fs/promises";
+import { readFile, writeFile, mkdir, rename } from "fs/promises";
 import { dirname, resolve } from "path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { detectLocales } from "../locale-detection/index.js";
@@ -28,6 +28,18 @@ import {
   isPathWithinProject,
 } from "../utils/validation.js";
 import type { FileFormat, TranslateFileChangeSummary } from "../api/types.js";
+
+/**
+ * Write a file atomically: write to a sibling temp file, then rename over the
+ * target. rename() is atomic on the same filesystem, so a concurrent sync (or a
+ * crash mid-write) never observes a half-written or truncated localization file
+ * (finding #32). Last writer wins, but every observable state is a complete file.
+ */
+async function atomicWriteFile(path: string, content: string): Promise<void> {
+  const tmpPath = `${path}.${process.pid}.tmp`;
+  await writeFile(tmpPath, content, "utf-8");
+  await rename(tmpPath, path);
+}
 
 const SyncTranslationsSchema = z.object({
   source_lang: languageCodeSchema.describe("Source language code (e.g., 'en', 'pt-BR')"),
@@ -299,7 +311,7 @@ export function registerSyncTranslations(server: McpServer): void {
             if (input.write_to_files) {
               const writePath = isSameFile ? file.path : resolvedTargetPath;
               await mkdir(dirname(writePath), { recursive: true });
-              await writeFile(writePath, response.translated_file_content, "utf-8");
+              await atomicWriteFile(writePath, response.translated_file_content);
               fileWritten = writePath;
             }
 

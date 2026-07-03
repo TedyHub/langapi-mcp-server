@@ -421,3 +421,62 @@ describe("sync_translations (i18next — directory-per-locale JSON)", () => {
     expect(common.greeting).toBe("Welcome, {{name}}!-fr");
   });
 });
+
+describe("sync_translations (stringsdict — iOS .stringsdict plurals)", () => {
+  let tempDir: TempTestDir;
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    tempDir = await copyFixtureToTemp("ios-stringsdict");
+    fetchMock = vi.fn(mockTranslateFileFetch);
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(async () => {
+    await tempDir.cleanup();
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it("sends file_format=stringsdict and writes into the target .lproj directory (#20)", async () => {
+    const handler = await loadSyncTranslationsHandler();
+    await handler({
+      source_lang: "en",
+      target_langs: ["de"],
+      project_path: tempDir.path,
+      dry_run: false,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.file_format).toBe("stringsdict");
+
+    const written = await fileExists(tempDir.path, "de.lproj/Localizable.stringsdict");
+    expect(written).toBe(true);
+    const de = await readRawFixture(tempDir.path, "de.lproj/Localizable.stringsdict");
+    // Human-readable plural variants are translated...
+    expect(de).toContain("<string>You have one item-de</string>");
+    expect(de).toContain("<string>You have many items-de</string>");
+    // ...while plist structural constants are left intact.
+    expect(de).toContain("<string>NSStringPluralRuleType</string>");
+    expect(de).toContain("<string>%#@items@</string>");
+  });
+
+  it("reports a cost estimate on a dry run without writing", async () => {
+    const handler = await loadSyncTranslationsHandler();
+    await handler({
+      source_lang: "en",
+      target_langs: ["de"],
+      project_path: tempDir.path,
+      dry_run: true,
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.file_format).toBe("stringsdict");
+    expect(body.dry_run).toBe(true);
+    // No de.lproj should be created on a dry run.
+    expect(await fileExists(tempDir.path, "de.lproj/Localizable.stringsdict")).toBe(false);
+  });
+});

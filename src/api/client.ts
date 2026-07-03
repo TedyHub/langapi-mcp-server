@@ -4,16 +4,55 @@
 
 import { API_BASE_URL } from "../config/env.js";
 import { getAuthToken, hasAnyCredentials, forceRefreshAuthToken } from "../auth/token-provider.js";
-import type { TranslateFileRequest, TranslateFileResponse, AccountStatusResult } from "./types.js";
+import type {
+  TranslateFileRequest,
+  TranslateFileResponse,
+  AccountStatusResult,
+  AddGlossaryTermRequest,
+  GlossaryTermDto,
+  GlossaryListResult,
+  GlossaryAddResult,
+  GlossaryDeleteResult,
+} from "./types.js";
 
-/** Default request timeout in milliseconds (30 seconds) */
-const DEFAULT_TIMEOUT_MS = 30000;
+/**
+ * Default request timeout in milliseconds (2 minutes). A large first-time sync
+ * or new-language add translates one Qwen call per changed string at the
+ * server's concurrency limit, which can legitimately exceed the old 30s cap and
+ * abort a still-running (and still-billing) server job client-side (finding
+ * #34). The server enforces its own per-call timeouts, so this is the outer
+ * bound on a whole translate-file request.
+ */
+const DEFAULT_TIMEOUT_MS = 120000;
+
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
 
 function isTranslateFileResponse(data: unknown): data is TranslateFileResponse {
   if (typeof data !== "object" || data === null) return false;
   const obj = data as Record<string, unknown>;
   if (obj.success !== true) return false;
-  return typeof obj.delta === "object" && obj.delta !== null && typeof obj.cost === "object" && obj.cost !== null;
+  if (typeof obj.delta !== "object" || obj.delta === null) return false;
+  if (typeof obj.cost !== "object" || obj.cost === null) return false;
+  const cost = obj.cost as Record<string, unknown>;
+
+  // Execute response: the translated file must be a non-empty string and the
+  // cost fields must be finite numbers, so we never write a truncated/empty
+  // file to disk or accumulate NaN into the credit totals (findings #33/#39).
+  if ("translated_file_content" in obj) {
+    if (typeof obj.translated_file_content !== "string" || obj.translated_file_content.length === 0) {
+      return false;
+    }
+    return isFiniteNumber(cost.creditsUsed) && isFiniteNumber(cost.balanceAfterSync);
+  }
+
+  // Dry-run estimate response: numeric estimate fields.
+  return (
+    isFiniteNumber(cost.wordsToTranslate) &&
+    isFiniteNumber(cost.creditsRequired) &&
+    isFiniteNumber(cost.balanceAfterSync)
+  );
 }
 
 export class LangAPIClient {
@@ -199,5 +238,97 @@ export class LangAPIClient {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  /** Raw authenticated fetch with the client timeout applied. */
+  private async rawFetch(method: string, path: string, body?: unknown): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      return await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  private static errorFrom(status: number, data: unknown): { code: string; message: string } {
+    const obj = typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {};
+    const errObj = typeof obj.error === "object" && obj.error !== null ? (obj.error as Record<string, unknown>) : {};
+    return {
+      code: typeof errObj.code === "string" ? errObj.code : "API_ERROR",
+      message: typeof errObj.message === "string" ? errObj.message : `HTTP ${status}`,
+    };
+  }
+
+  /**
+   * Authenticated JSON request with the same TOKEN_EXPIRED refresh-and-retry
+   * recovery as translateFile. Returns the parsed body plus status, or a
+   * network/timeout error envelope.
+   */
+  private async authedJson(
+    method: string,
+    path: string,
+    body?: unknown
+  ): Promise<{ ok: boolean; status: number; data: unknown } | { networkError: { code: string; message: string } }> {
+    try {
+      let res = await this.rawFetch(method, path, body);
+      let data: unknown = await res.json().catch(() => ({}));
+      if (!res.ok && LangAPIClient.errorFrom(res.status, data).code === "TOKEN_EXPIRED") {
+        const newToken = await forceRefreshAuthToken();
+        if (newToken) {
+          this.apiKey = newToken;
+          res = await this.rawFetch(method, path, body);
+          data = await res.json().catch(() => ({}));
+        }
+      }
+      return { ok: res.ok, status: res.status, data };
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        return { networkError: { code: "TIMEOUT", message: `Request timed out after ${this.timeoutMs}ms` } };
+      }
+      return { networkError: { code: "NETWORK_ERROR", message: error instanceof Error ? error.message : "Unknown network error" } };
+    }
+  }
+
+  /** List glossary terms, optionally filtered to one language pair. */
+  async listGlossary(sourceLang?: string, targetLang?: string): Promise<GlossaryListResult> {
+    const path =
+      sourceLang && targetLang
+        ? `/api/v1/glossary/${encodeURIComponent(sourceLang)}/${encodeURIComponent(targetLang)}`
+        : `/api/v1/glossary?limit=500`;
+    const result = await this.authedJson("GET", path);
+    if ("networkError" in result) return { success: false, error: result.networkError };
+    if (!result.ok) return { success: false, error: LangAPIClient.errorFrom(result.status, result.data) };
+
+    const obj = typeof result.data === "object" && result.data !== null ? (result.data as Record<string, unknown>) : {};
+    if (Array.isArray(obj.data)) return { success: true, data: obj.data as GlossaryTermDto[] };
+    return { success: false, error: { code: "INVALID_RESPONSE", message: "API returned an unexpected response format" } };
+  }
+
+  /** Create a glossary term. */
+  async addGlossaryTerm(term: AddGlossaryTermRequest): Promise<GlossaryAddResult> {
+    const result = await this.authedJson("POST", "/api/v1/glossary", term);
+    if ("networkError" in result) return { success: false, error: result.networkError };
+    if (!result.ok) return { success: false, error: LangAPIClient.errorFrom(result.status, result.data) };
+
+    const obj = typeof result.data === "object" && result.data !== null ? (result.data as Record<string, unknown>) : {};
+    if (typeof obj.data === "object" && obj.data !== null) return { success: true, data: obj.data as GlossaryTermDto };
+    return { success: false, error: { code: "INVALID_RESPONSE", message: "API returned an unexpected response format" } };
+  }
+
+  /** Delete a glossary term by id. */
+  async deleteGlossaryTerm(id: string): Promise<GlossaryDeleteResult> {
+    const result = await this.authedJson("DELETE", `/api/v1/glossary/${encodeURIComponent(id)}`);
+    if ("networkError" in result) return { success: false, error: result.networkError };
+    if (!result.ok) return { success: false, error: LangAPIClient.errorFrom(result.status, result.data) };
+    return { success: true };
   }
 }

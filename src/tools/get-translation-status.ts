@@ -43,8 +43,6 @@ interface TargetStatus {
 interface CostEstimate {
   words_to_translate: number;
   credits_required: number;
-  current_balance?: number;
-  balance_after_sync?: number;
 }
 
 export interface GetTranslationStatusOutput {
@@ -52,6 +50,14 @@ export interface GetTranslationStatusOutput {
   source_keys: number;
   targets: TargetStatus[];
   cost_estimate: CostEstimate | null;
+  /**
+   * Clarifies the meaning of each target's `status` (finding #52): it is
+   * computed from key sets only, so "synced" does not guarantee the translated
+   * text is current — a key whose source text changed but whose name stayed the
+   * same still reads as "synced" here, yet sync_translations would re-translate
+   * it (the server detects changed text via a content hash at sync time).
+   */
+  status_semantics: string;
 }
 
 /**
@@ -181,6 +187,10 @@ export function registerGetTranslationStatus(server: McpServer): void {
         const missing = sourceKeys.filter((k) => !targetKeySet.has(k));
         const extra = targetKeys.filter((k) => !sourceKeySet.has(k));
 
+        // Key-set-only status: "outdated" means keys are missing. It does NOT
+        // detect changed source text under an unchanged key name — that's
+        // caught server-side by the content hash at sync time (finding #52,
+        // documented in `status_semantics` on the output).
         const status: "synced" | "outdated" | "missing" =
           missing.length === 0 && extra.length === 0
             ? "synced"
@@ -233,6 +243,8 @@ export function registerGetTranslationStatus(server: McpServer): void {
         source_keys: sourceKeys.length,
         targets,
         cost_estimate: costEstimate,
+        status_semantics:
+          '"status" is computed from key presence only. "synced" means all source keys exist in the target; it does NOT mean the translated text is up to date — if a source string changed but its key name did not, this still shows "synced", yet running sync_translations will re-translate it (the server detects changed text by content hash).',
       };
 
       return {

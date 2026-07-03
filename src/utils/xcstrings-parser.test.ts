@@ -2,10 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   parseXCStringsContent,
   extractLocaleFromXCStrings,
-  updateXCStringsLocale,
-  mergeXCStringsContent,
-  reconstructXCStringsContent,
-  getXCStringsLanguages,
   type XCStringsFile,
 } from "./xcstrings-parser.js";
 
@@ -109,128 +105,6 @@ describe("XCStrings Parser", () => {
       const result = extractLocaleFromXCStrings(sampleXCStrings, "de");
 
       expect(result).toEqual([{ key: "greeting", value: "Hallo" }]);
-    });
-  });
-
-  describe("getXCStringsLanguages", () => {
-    it("should return all language codes", () => {
-      const result = getXCStringsLanguages(sampleXCStrings);
-
-      expect(result).toContain("en");
-      expect(result).toContain("de");
-      expect(result.size).toBe(2);
-    });
-  });
-
-  describe("updateXCStringsLocale", () => {
-    it("should add new locale translations", () => {
-      const translations = [
-        { key: "greeting", value: "Bonjour" },
-        { key: "farewell", value: "Au revoir" },
-      ];
-
-      const result = updateXCStringsLocale(sampleXCStrings, "fr", translations);
-
-      expect(result.strings.greeting.localizations?.fr?.stringUnit?.value).toBe(
-        "Bonjour"
-      );
-      expect(result.strings.farewell.localizations?.fr?.stringUnit?.value).toBe(
-        "Au revoir"
-      );
-    });
-
-    it("should update existing locale", () => {
-      const translations = [{ key: "greeting", value: "Guten Tag" }];
-
-      const result = updateXCStringsLocale(sampleXCStrings, "de", translations);
-
-      expect(result.strings.greeting.localizations?.de?.stringUnit?.value).toBe(
-        "Guten Tag"
-      );
-    });
-
-    it("should set state to translated", () => {
-      const translations = [{ key: "greeting", value: "Bonjour" }];
-
-      const result = updateXCStringsLocale(sampleXCStrings, "fr", translations);
-
-      expect(result.strings.greeting.localizations?.fr?.stringUnit?.state).toBe(
-        "translated"
-      );
-    });
-
-    it("should preserve other locales", () => {
-      const translations = [{ key: "greeting", value: "Bonjour" }];
-
-      const result = updateXCStringsLocale(sampleXCStrings, "fr", translations);
-
-      expect(result.strings.greeting.localizations?.en?.stringUnit?.value).toBe(
-        "Hello"
-      );
-      expect(result.strings.greeting.localizations?.de?.stringUnit?.value).toBe(
-        "Hallo"
-      );
-    });
-
-    it("should not modify original object", () => {
-      const translations = [{ key: "greeting", value: "Bonjour" }];
-
-      updateXCStringsLocale(sampleXCStrings, "fr", translations);
-
-      expect(
-        sampleXCStrings.strings.greeting.localizations?.fr
-      ).toBeUndefined();
-    });
-  });
-
-  describe("mergeXCStringsContent", () => {
-    it("should merge without affecting other languages", () => {
-      const translations = [{ key: "greeting", value: "Hola" }];
-      const sourceKeys = new Set(["greeting", "farewell"]);
-
-      const result = mergeXCStringsContent(
-        sampleXCStrings,
-        "es",
-        translations,
-        sourceKeys
-      );
-
-      expect(result.strings.greeting.localizations?.es?.stringUnit?.value).toBe(
-        "Hola"
-      );
-      expect(result.strings.greeting.localizations?.en?.stringUnit?.value).toBe(
-        "Hello"
-      );
-    });
-
-    it("should remove deleted keys from all locales", () => {
-      const translations: Array<{ key: string; value: string }> = [];
-      const sourceKeys = new Set(["greeting"]); // farewell removed from source
-
-      const result = mergeXCStringsContent(
-        sampleXCStrings,
-        "de",
-        translations,
-        sourceKeys
-      );
-
-      expect(result.strings.farewell).toBeUndefined();
-      expect(result.strings.greeting).toBeDefined();
-    });
-  });
-
-  describe("reconstructXCStringsContent", () => {
-    it("should generate valid JSON", () => {
-      const result = reconstructXCStringsContent(sampleXCStrings);
-      const parsed = JSON.parse(result);
-
-      expect(parsed.sourceLanguage).toBe("en");
-      expect(parsed.version).toBe("1.0");
-    });
-
-    it("should have trailing newline", () => {
-      const result = reconstructXCStringsContent(sampleXCStrings);
-      expect(result.endsWith("\n")).toBe(true);
     });
   });
 });

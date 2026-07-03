@@ -105,12 +105,30 @@ function translateXCStrings(request: TranslateFileRequest): { translated: string
   return { translated: JSON.stringify(base, null, 2) + "\n", newKeys: keys };
 }
 
+function translateStringsDict(sourceContent: string, targetLang: string): { translated: string; newKeys: string[] } {
+  // Simplified: append the language suffix to the human-readable plural variant
+  // strings, leaving the plist's structural constants (spec type, format key,
+  // value type) untouched. Good enough to exercise the client's stringsdict
+  // read/POST/write path.
+  const keys: string[] = [];
+  const translated = sourceContent.replace(/<string>([^<]*)<\/string>/g, (full, value: string) => {
+    if (value === "" || /^NSString/.test(value) || value.startsWith("%#@") || value === "d") {
+      return full;
+    }
+    keys.push(value);
+    return `<string>${mockTranslate(value, targetLang)}</string>`;
+  });
+  return { translated, newKeys: keys };
+}
+
 function translateByFormat(request: TranslateFileRequest): { translated: string; newKeys: string[] } {
   switch (request.file_format) {
     case "arb":
       return translateArb(request.source_file_content, request.target_lang);
     case "strings":
       return translateStrings(request.source_file_content, request.target_lang);
+    case "stringsdict":
+      return translateStringsDict(request.source_file_content, request.target_lang);
     case "xcstrings":
       return translateXCStrings(request);
     default:
