@@ -7,16 +7,25 @@ This package enables AI assistants like Claude, Cursor, and VS Code extensions t
 ## Quick Start
 
 ```bash
-# 1. Get your API key at https://langapi.io (1,000 free credits)
+# 1. Sign in via your browser (recommended) — opens langapi.io to approve access
+npx @langapi/mcp-server login
 
 # 2. Add to your AI tool (example for Claude Desktop on macOS):
 # Edit ~/Library/Application Support/Claude/claude_desktop_config.json
+# No LANGAPI_API_KEY needed — credentials from `login` are picked up automatically.
 
 # 3. Start chatting:
 # "Scan my project for translations"
 # "What keys are missing in German?"
 # "Sync all translations"
 ```
+
+## Authentication
+
+Two ways to authenticate, in priority order:
+
+1. **Browser login (recommended for interactive use)** — run `npx @langapi/mcp-server login` once in your terminal. This opens your browser to approve access on langapi.io, then stores a session token at `~/.langapi/credentials.json` (auto-refreshed as needed). Run `npx @langapi/mcp-server logout` to revoke it.
+2. **Static API key (for CI / non-interactive use)** — generate one from your [dashboard](https://langapi.io/dashboard/api-keys) and set it as the `LANGAPI_API_KEY` environment variable. If set, this always takes priority over a browser-login session.
 
 ## Features
 
@@ -25,7 +34,7 @@ This package enables AI assistants like Claude, Cursor, and VS Code extensions t
 - **Sync Translations**: Translate missing keys via LangAPI with credit-based billing
 - **Dry Run Mode**: Preview changes and costs before syncing (enabled by default)
 - **Format Preservation**: Maintains JSON formatting when writing translated files
-- **Delta Detection**: Only translate new/changed keys, saving up to 90% on costs
+- **Server-Side Delta Detection**: The LangAPI backend compares each file against its previous translation and only translates what's new or changed, saving up to 90% on costs — this client never inspects file content itself
 - **Apple Localization**: Support for iOS/macOS `.strings`, `.xcstrings`, and `.stringsdict` files
 
 ## Installation
@@ -327,6 +336,8 @@ Compare source locale against targets to identify missing keys and estimate cost
 
 Sync translations via the LangAPI API. **Default is dry_run=true for safety.**
 
+As of v2, this tool is a thin client: for each source file and target language it reads the current source file and the existing translation (if any) and sends both, as-is, to `POST /api/v1/translate-file`. All comparison, format parsing, and merging happens server-side — the client never inspects file content to decide what changed.
+
 **Input:**
 ```json
 {
@@ -334,8 +345,7 @@ Sync translations via the LangAPI API. **Default is dry_run=true for safety.**
   "target_langs": ["de", "fr"],
   "dry_run": true,                     // default: true (preview mode)
   "project_path": "/path/to/project",  // optional
-  "write_to_files": true,              // optional, default: true
-  "skip_keys": ["key.to.skip"]         // optional, keys to exclude
+  "write_to_files": true               // optional, default: true
 }
 ```
 
@@ -344,18 +354,21 @@ Sync translations via the LangAPI API. **Default is dry_run=true for safety.**
 {
   "success": true,
   "dry_run": true,
-  "delta": {
-    "new_keys": ["new.key1", "new.key2"],
-    "changed_keys": [],
-    "total_keys_to_sync": 2
-  },
-  "cost": {
+  "summary": {
+    "new_keys": 2,
+    "changed_keys": 0,
+    "removed_keys": 0,
+    "reused_from_cache": 118,
     "words_to_translate": 45,
     "credits_required": 90,
     "current_balance": 1000,
     "balance_after_sync": 910
   },
-  "message": "Preview: 2 keys to sync, 90 credits required. Run with dry_run=false to execute."
+  "per_language": [
+    { "language": "de", "file": "messages/en.json", "new_keys": 1, "changed_keys": 0, "removed_keys": 0, "reused_from_cache": 59 },
+    { "language": "fr", "file": "messages/en.json", "new_keys": 1, "changed_keys": 0, "removed_keys": 0, "reused_from_cache": 59 }
+  ],
+  "message": "Preview: 45 words to translate across 2 language(s), 90 credits required. Run with dry_run=false to execute."
 }
 ```
 
@@ -365,14 +378,14 @@ Sync translations via the LangAPI API. **Default is dry_run=true for safety.**
   "success": true,
   "dry_run": false,
   "results": [
-    { "language": "de", "translated_count": 2, "file_written": "messages/de.json" },
-    { "language": "fr", "translated_count": 2, "file_written": "messages/fr.json" }
+    { "language": "de", "file_written": "/path/to/project/messages/de.json", "new_keys": 1, "changed_keys": 0, "removed_keys": 0, "reused_from_cache": 59 },
+    { "language": "fr", "file_written": "/path/to/project/messages/fr.json", "new_keys": 1, "changed_keys": 0, "removed_keys": 0, "reused_from_cache": 59 }
   ],
   "cost": {
     "credits_used": 90,
     "balance_after_sync": 1910
   },
-  "message": "Sync complete. 4 keys translated across 2 languages. 90 credits used."
+  "message": "Sync complete across 2 language(s)."
 }
 ```
 

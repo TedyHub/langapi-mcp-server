@@ -8,8 +8,6 @@ import { readFile } from "fs/promises";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { detectLocales } from "../locale-detection/index.js";
 import { getAllKeys, parseJsonSafe, flattenJson } from "../utils/json-parser.js";
-import { LangAPIClient } from "../api/client.js";
-import { delay } from "../utils/delay.js";
 import { isXCStringsFile } from "../utils/apple-common.js";
 import { parseXCStringsContent, extractLocaleFromXCStrings } from "../utils/xcstrings-parser.js";
 import { languageCodeSchema } from "../utils/validation.js";
@@ -131,7 +129,6 @@ export function registerGetTranslationStatus(server: McpServer): void {
 
       // Compare with each target
       const targets: TargetStatus[] = [];
-      let totalMissingKeys: string[] = [];
 
       for (const targetLang of targetLangs) {
         const targetLocale = detection.locales.find((l) => l.lang === targetLang);
@@ -147,7 +144,6 @@ export function registerGetTranslationStatus(server: McpServer): void {
               extra: [],
             },
           });
-          totalMissingKeys.push(...sourceKeys);
           continue;
         }
 
@@ -202,7 +198,6 @@ export function registerGetTranslationStatus(server: McpServer): void {
           },
         });
 
-        totalMissingKeys.push(...missing);
       }
 
       // Estimate cost locally - calculate per-language to get accurate totals
@@ -232,50 +227,6 @@ export function registerGetTranslationStatus(server: McpServer): void {
         words_to_translate: totalWordsToTranslate,
         credits_required: creditsRequired,
       };
-
-      // Get balance info from server if API key is configured
-      if (LangAPIClient.canCreate()) {
-        try {
-          const client = LangAPIClient.create();
-          // Only send actually missing content to get accurate API estimate
-          const missingKeySet = new Set(totalMissingKeys);
-          const itemsToTranslate = flatSource.filter((item) =>
-            missingKeySet.has(item.key)
-          );
-
-          // Make one API call per language (with 1s delay between calls)
-          let serverBalance: number | undefined;
-          let isFirstCall = true;
-          for (const lang of targetLangs) {
-            if (!isFirstCall) {
-              await delay(1000);
-            }
-            isFirstCall = false;
-
-            const response = await client.sync({
-              source_lang: input.source_lang,
-              target_langs: [lang],
-              content: itemsToTranslate,
-              dry_run: true,
-            });
-
-            if (response.success && "delta" in response) {
-              serverBalance = response.cost.currentBalance;
-            }
-          }
-
-          if (serverBalance !== undefined) {
-            costEstimate = {
-              words_to_translate: totalWordsToTranslate,
-              credits_required: creditsRequired,
-              current_balance: serverBalance,
-              balance_after_sync: serverBalance - creditsRequired,
-            };
-          }
-        } catch {
-          // Fall back to local estimate without balance info
-        }
-      }
 
       const output: GetTranslationStatusOutput = {
         source_lang: input.source_lang,

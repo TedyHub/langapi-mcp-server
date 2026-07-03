@@ -1,80 +1,70 @@
 /**
- * API request/response types for LangAPI
- * These types match the langapi-api sync endpoint
+ * API request/response types for LangAPI.
+ * These types match langapi-api's `POST /api/v1/translate-file` contract
+ * (hand-duplicated across the two repos — keep in sync manually).
  */
 
-// Key-value pair for translation content
+export type FileFormat = "json" | "arb" | "strings" | "stringsdict" | "xcstrings";
+
+// Key-value pair, still used by locale-detection's key counting.
 export interface KeyValue {
   key: string;
   value: string;
 }
 
-// Precision level for sync operations
-export type SyncPrecision = "standard" | "extra";
-
-// Sync request body
-// Note: precision is not included here - endpoint selection (/sync vs /extra-sync) handles this
-export interface SyncRequest {
+export interface TranslateFileRequest {
   source_lang: string;
-  target_langs: string[];
-  content: KeyValue[];
+  target_lang: string;
+  file_format: FileFormat;
+  source_file_content: string;
+  previous_target_file_content?: string;
   dry_run: boolean;
 }
 
-// Delta information showing what changed
-export interface SyncDelta {
+export interface TranslateFileChangeSummary {
   newKeys: string[];
   changedKeys: string[];
-  unchangedKeys: string[];
-  totalKeysToSync: number;
+  removedKeys: string[];
+  reusedFromCacheCount: number;
 }
 
-// Cost estimation
-export interface SyncCostEstimate {
+export interface TranslateFileCost {
   wordsToTranslate: number;
   creditsRequired: number;
   currentBalance: number;
   balanceAfterSync: number;
+  unlimitedPlan?: boolean;
 }
 
-// Response for dry_run: true
-export interface SyncDryRunResponse {
+export interface TranslateFileDryRunResponse {
   success: true;
-  delta: SyncDelta;
-  cost: SyncCostEstimate;
+  delta: TranslateFileChangeSummary;
+  cost: TranslateFileCost;
 }
 
-// Result per language after sync
-export interface SyncLanguageResult {
-  language: string;
-  translatedCount: number;
-  translations: KeyValue[];
-}
-
-// Response for dry_run: false
-export interface SyncExecuteResponse {
+export interface TranslateFileExecuteResponse {
   success: true;
-  results: SyncLanguageResult[];
+  translated_file_content: string;
+  delta: TranslateFileChangeSummary;
+  qaWarnings?: number;
   cost: {
     creditsUsed: number;
     balanceAfterSync: number;
+    unlimitedPlan?: boolean;
   };
 }
 
-// Error response
-export interface SyncErrorResponse {
+export interface TranslateFileErrorResponse {
   success: false;
   error: {
     code: string;
     message: string;
     currentBalance?: number;
     requiredCredits?: number;
-    topUpUrl?: string;
   };
 }
 
-// Union type for all sync responses
-export type SyncResponse =
-  | SyncDryRunResponse
-  | SyncExecuteResponse
-  | SyncErrorResponse;
+export type TranslateFileResponse =
+  | TranslateFileDryRunResponse
+  | TranslateFileExecuteResponse
+  | TranslateFileErrorResponse;

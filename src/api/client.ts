@@ -2,46 +2,18 @@
  * LangAPI client for making API requests
  */
 
-import { API_BASE_URL, getApiKey } from "../config/env.js";
-import type {
-  SyncRequest,
-  SyncResponse,
-  SyncDryRunResponse,
-  SyncExecuteResponse,
-} from "./types.js";
+import { API_BASE_URL } from "../config/env.js";
+import { getAuthToken, hasAnyCredentials } from "../auth/token-provider.js";
+import type { TranslateFileRequest, TranslateFileResponse } from "./types.js";
 
 /** Default request timeout in milliseconds (30 seconds) */
 const DEFAULT_TIMEOUT_MS = 30000;
 
-/**
- * Type guard for SyncDryRunResponse
- */
-function isSyncDryRunResponse(data: unknown): data is SyncDryRunResponse {
+function isTranslateFileResponse(data: unknown): data is TranslateFileResponse {
   if (typeof data !== "object" || data === null) return false;
   const obj = data as Record<string, unknown>;
-  return (
-    obj.success === true &&
-    typeof obj.delta === "object" &&
-    obj.delta !== null &&
-    typeof obj.cost === "object" &&
-    obj.cost !== null &&
-    "wordsToTranslate" in (obj.cost as Record<string, unknown>)
-  );
-}
-
-/**
- * Type guard for SyncExecuteResponse
- */
-function isSyncExecuteResponse(data: unknown): data is SyncExecuteResponse {
-  if (typeof data !== "object" || data === null) return false;
-  const obj = data as Record<string, unknown>;
-  return (
-    obj.success === true &&
-    Array.isArray(obj.results) &&
-    typeof obj.cost === "object" &&
-    obj.cost !== null &&
-    "creditsUsed" in (obj.cost as Record<string, unknown>)
-  );
+  if (obj.success !== true) return false;
+  return typeof obj.delta === "object" && obj.delta !== null && typeof obj.cost === "object" && obj.cost !== null;
 }
 
 export class LangAPIClient {
@@ -60,54 +32,41 @@ export class LangAPIClient {
   }
 
   /**
-   * Create a client instance using the configured API key
-   * @throws Error if no API key is configured
+   * Create a client instance, resolving a bearer token from either the
+   * static LANGAPI_API_KEY env var or a browser-login session (auto-
+   * refreshed if needed).
+   * @throws Error if no credentials are configured at all
    */
-  static create(): LangAPIClient {
-    const apiKey = getApiKey();
-    if (!apiKey) {
+  static async create(): Promise<LangAPIClient> {
+    const token = await getAuthToken();
+    if (!token) {
       throw new Error(
-        "No API key configured. Set the LANGAPI_API_KEY environment variable."
+        "Not authenticated. Run `npx @langapi/mcp-server login`, or set the LANGAPI_API_KEY environment variable for CI."
       );
     }
-    return new LangAPIClient(apiKey);
+    return new LangAPIClient(token);
   }
 
   /**
-   * Check if client can be created (API key is configured)
+   * Cheap synchronous check for "is some credential configured at all" —
+   * does not validate or refresh anything.
    */
   static canCreate(): boolean {
-    return !!getApiKey();
+    return hasAnyCredentials();
   }
 
   /**
-   * Sync translations with the LangAPI service
+   * Translate a whole locale file. The server parses both the current
+   * source file and the previous translation (if provided), diffs via its
+   * hash cache, translates only what changed, and returns a ready-to-write
+   * file in the original format — this client does no comparison itself.
    */
-  async sync(request: SyncRequest): Promise<SyncResponse> {
-    return this.callSyncEndpoint(`${this.baseUrl}/api/v1/sync`, request);
-  }
-
-  /**
-   * Sync translations with extra precision using the LangAPI service
-   * Uses the /api/v1/extra-sync endpoint for higher quality translations (2 credits/word)
-   */
-  async extraSync(request: SyncRequest): Promise<SyncResponse> {
-    return this.callSyncEndpoint(`${this.baseUrl}/api/v1/extra-sync`, request);
-  }
-
-  /**
-   * Internal method to call sync endpoints
-   */
-  private async callSyncEndpoint(
-    url: string,
-    request: SyncRequest
-  ): Promise<SyncResponse> {
-    // Create abort controller for timeout
+  async translateFile(request: TranslateFileRequest): Promise<TranslateFileResponse> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
-      const response = await fetch(url, {
+      const response = await fetch(`${this.baseUrl}/api/v1/translate-file`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -120,11 +79,7 @@ export class LangAPIClient {
       const data: unknown = await response.json();
 
       if (!response.ok) {
-        // Parse error response safely
-        const errorObj =
-          typeof data === "object" && data !== null
-            ? (data as Record<string, unknown>)
-            : {};
+        const errorObj = typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {};
         const errorData =
           typeof errorObj.error === "object" && errorObj.error !== null
             ? (errorObj.error as Record<string, unknown>)
@@ -134,59 +89,28 @@ export class LangAPIClient {
           success: false,
           error: {
             code: typeof errorData.code === "string" ? errorData.code : "API_ERROR",
-            message:
-              typeof errorData.message === "string"
-                ? errorData.message
-                : `HTTP ${response.status}`,
-            currentBalance:
-              typeof errorData.currentBalance === "number"
-                ? errorData.currentBalance
-                : undefined,
-            requiredCredits:
-              typeof errorData.requiredCredits === "number"
-                ? errorData.requiredCredits
-                : undefined,
-            topUpUrl:
-              typeof errorData.topUpUrl === "string"
-                ? errorData.topUpUrl
-                : undefined,
+            message: typeof errorData.message === "string" ? errorData.message : `HTTP ${response.status}`,
+            currentBalance: typeof errorData.currentBalance === "number" ? errorData.currentBalance : undefined,
+            requiredCredits: typeof errorData.requiredCredits === "number" ? errorData.requiredCredits : undefined,
           },
         };
       }
 
-      // Validate successful response using type guards
-      if (isSyncDryRunResponse(data)) {
-        return data;
-      }
-      if (isSyncExecuteResponse(data)) {
+      if (isTranslateFileResponse(data)) {
         return data;
       }
 
-      // Unknown response format
       return {
         success: false,
-        error: {
-          code: "INVALID_RESPONSE",
-          message: "API returned an unexpected response format",
-        },
+        error: { code: "INVALID_RESPONSE", message: "API returned an unexpected response format" },
       };
     } catch (error) {
-      // Handle timeout and network errors
       if (error instanceof Error && error.name === "AbortError") {
-        return {
-          success: false,
-          error: {
-            code: "TIMEOUT",
-            message: `Request timed out after ${this.timeoutMs}ms`,
-          },
-        };
+        return { success: false, error: { code: "TIMEOUT", message: `Request timed out after ${this.timeoutMs}ms` } };
       }
       return {
         success: false,
-        error: {
-          code: "NETWORK_ERROR",
-          message: error instanceof Error ? error.message : "Unknown network error",
-        },
+        error: { code: "NETWORK_ERROR", message: error instanceof Error ? error.message : "Unknown network error" },
       };
     } finally {
       clearTimeout(timeoutId);

@@ -5,6 +5,10 @@
 export const API_BASE_URL =
   process.env.LANGAPI_API_URL || "https://api.langapi.io";
 
+/** Web dashboard base URL — hosts the /mcp/authorize browser-login consent page. */
+export const WEB_BASE_URL =
+  process.env.LANGAPI_WEB_URL || "https://langapi.io";
+
 /**
  * Get the API key from environment variable
  * @returns The API key or null if not configured
