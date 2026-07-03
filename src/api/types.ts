@@ -68,3 +68,17 @@ export type TranslateFileResponse =
   | TranslateFileDryRunResponse
   | TranslateFileExecuteResponse
   | TranslateFileErrorResponse;
+
+export interface AccountStatusResponse {
+  success: true;
+  account: {
+    credits: number;
+    plan: "unlimited" | "pay-as-you-go";
+    unlimitedPlan?: boolean;
+    subscriptionExpiresAt?: string;
+  };
+}
+
+export type AccountStatusResult =
+  | AccountStatusResponse
+  | { success: false; error: { code: string; message: string } };

@@ -65,6 +65,27 @@ export async function getAuthToken(): Promise<string | null> {
 }
 
 /**
+ * Force a refresh of the browser-login session token, persisting the rotated
+ * credentials, and return the new access token. Returns null when a refresh
+ * isn't possible — a static LANGAPI_API_KEY is in use (nothing to refresh),
+ * there are no stored credentials, or the refresh request itself failed.
+ *
+ * Used by the API client to transparently recover from a mid-request
+ * TOKEN_EXPIRED 401 without re-running `create()`.
+ */
+export async function forceRefreshAuthToken(): Promise<string | null> {
+  // A static API key can't be refreshed — the caller should surface the
+  // auth error rather than retry.
+  if (getApiKey()) return null;
+
+  const creds = await readCredentials();
+  if (!creds) return null;
+
+  const refreshed = await refreshAccessToken(creds);
+  return refreshed?.access_token ?? null;
+}
+
+/**
  * Revoke the current session server-side (best-effort) and clear local
  * credentials. Used by `langapi-mcp logout`.
  */

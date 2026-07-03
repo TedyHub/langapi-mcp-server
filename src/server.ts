@@ -6,6 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerListLocalLocales } from "./tools/list-local-locales.js";
 import { registerGetTranslationStatus } from "./tools/get-translation-status.js";
 import { registerSyncTranslations } from "./tools/sync-translations.js";
+import { registerGetAccountStatus } from "./tools/get-account-status.js";
 
 /**
  * Create and configure the MCP server
@@ -20,6 +21,7 @@ export function createServer(): McpServer {
   registerListLocalLocales(server);
   registerGetTranslationStatus(server);
   registerSyncTranslations(server);
+  registerGetAccountStatus(server);
 
   return server;
 }
