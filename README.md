@@ -36,6 +36,8 @@ Two ways to authenticate, in priority order:
 - **Format Preservation**: Maintains JSON formatting when writing translated files
 - **Server-Side Delta Detection**: The LangAPI backend compares each file against its previous translation and only translates what's new or changed, saving up to 90% on costs — this client never inspects file content itself
 - **Apple Localization**: Support for iOS/macOS `.strings`, `.xcstrings`, and `.stringsdict` files
+- **Glossary Management**: Force consistent translations for brand names and jargon (`manage_glossary`)
+- **Account Status**: Check remaining credits and plan from your assistant (`get_account_status`)
 
 ## Installation
 
@@ -256,7 +258,7 @@ Restart Windsurf after editing.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `LANGAPI_API_KEY` | Yes | Your LangAPI API key (get one at [langapi.io](https://langapi.io)) |
+| `LANGAPI_API_KEY` | No* | Static API key for CI / non-interactive use ([dashboard](https://langapi.io/dashboard/api-keys)). *Not needed if you signed in with `npx @langapi/mcp-server login`. If set, it overrides a browser-login session. |
 | `LANGAPI_API_URL` | No | Custom API URL (default: `https://api.langapi.io`) |
 
 ---
@@ -389,6 +391,48 @@ As of v2, this tool is a thin client: for each source file and target language i
 }
 ```
 
+### `manage_glossary`
+
+Manage the translation glossary — terms that force specific translations for brand names, product terms, or jargon. Terms apply automatically on every `sync_translations` run. Actions: `list`, `add`, `delete`.
+
+**Input:**
+```json
+{
+  "action": "add",            // "list" | "add" | "delete"
+  "source_lang": "en",        // add: required; list: optional filter
+  "target_lang": "de",        // add: required; list: optional filter
+  "source_text": "Wallet",    // add: required
+  "target_text": "Wallet",    // add: required
+  "case_sensitive": false,    // add: optional
+  "id": "term_id"             // delete: required (obtain from action:"list")
+}
+```
+
+**Output (action="list"):**
+```json
+{
+  "success": true,
+  "terms": [
+    { "id": "…", "source_lang": "en", "source_text": "Wallet", "target_lang": "de", "target_text": "Wallet", "case_sensitive": false }
+  ]
+}
+```
+
+### `get_account_status`
+
+Check your current credit balance and whether an unlimited subscription is active. Takes no input.
+
+**Output:**
+```json
+{
+  "success": true,
+  "credits": 910,
+  "plan": "unlimited",
+  "unlimited_plan": true,
+  "subscription_expires_at": "2026-08-05T00:00:00.000Z"
+}
+```
+
 ---
 
 ## Prompt Examples
@@ -441,6 +485,15 @@ As of v2, this tool is a thin client: for each source file and target language i
 "Skip the settings.* keys when syncing"
 "Only sync the home.* and nav.* keys"
 "Sync to Japanese but skip experimental features"
+```
+
+### Glossary & Account
+
+```
+"Always translate 'Wallet' as 'Кошелёк' in Russian"
+"List my glossary terms for German"
+"Remove that glossary term"
+"How many credits do I have left?"
 ```
 
 ### Complete Workflow Example
@@ -544,12 +597,12 @@ For self-hosted or enterprise deployments:
 
 ## Credits & Billing
 
-LangAPI uses a credit-based billing system:
-- **1 credit = 1 word** to translate
+- **1 credit = 1 word** to translate (only new or changed strings are billed — unchanged text is reused for free)
 - New users get **1,000 free credits**
-- Top up with **100,000 credits for $15** (no subscription, no expiry)
+- **Pay as you go:** top up **100,000 credits for $15** — credits never expire
+- **Unlimited plan:** **$19.99/month** for unlimited translations, with no per-word charges
 
-Get your API key at [langapi.io](https://langapi.io).
+Manage billing and your subscription at [langapi.io/dashboard/billing](https://langapi.io/dashboard/billing).
 
 ---
 
