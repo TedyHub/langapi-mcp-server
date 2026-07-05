@@ -36,7 +36,7 @@ Two ways to authenticate, in priority order:
 - **Format Preservation**: Maintains JSON formatting when writing translated files
 - **Server-Side Delta Detection**: The LangAPI backend compares each file against its previous translation and only translates what's new or changed, saving up to 90% on costs — this client never inspects file content itself
 - **Apple Localization**: Support for iOS/macOS `.strings`, `.xcstrings`, and `.stringsdict` files
-- **Glossary Management**: Force consistent translations for brand names and jargon (`manage_glossary`)
+- **Glossary**: Keep brand names and domain terms consistent by pointing `sync_translations` at a project glossary file (`glossary_file`)
 - **Account Status**: Check remaining credits and plan from your assistant (`get_account_status`)
 
 ## Installation
@@ -347,7 +347,8 @@ As of v2, this tool is a thin client: for each source file and target language i
   "target_langs": ["de", "fr"],
   "dry_run": true,                     // default: true (preview mode)
   "project_path": "/path/to/project",  // optional
-  "write_to_files": true               // optional, default: true
+  "write_to_files": true,              // optional, default: true
+  "glossary_file": "src/i18n/glossary/glossary.csv" // optional (see Glossary below)
 }
 ```
 
@@ -391,33 +392,6 @@ As of v2, this tool is a thin client: for each source file and target language i
 }
 ```
 
-### `manage_glossary`
-
-Manage the translation glossary — terms that force specific translations for brand names, product terms, or jargon. Terms apply automatically on every `sync_translations` run. Actions: `list`, `add`, `delete`.
-
-**Input:**
-```json
-{
-  "action": "add",            // "list" | "add" | "delete"
-  "source_lang": "en",        // add: required; list: optional filter
-  "target_lang": "de",        // add: required; list: optional filter
-  "source_text": "Wallet",    // add: required
-  "target_text": "Wallet",    // add: required
-  "case_sensitive": false,    // add: optional
-  "id": "term_id"             // delete: required (obtain from action:"list")
-}
-```
-
-**Output (action="list"):**
-```json
-{
-  "success": true,
-  "terms": [
-    { "id": "…", "source_lang": "en", "source_text": "Wallet", "target_lang": "de", "target_text": "Wallet", "case_sensitive": false }
-  ]
-}
-```
-
 ### `get_account_status`
 
 Check your current credit balance and whether an unlimited subscription is active. Takes no input.
@@ -432,6 +406,50 @@ Check your current credit balance and whether an unlimited subscription is activ
   "subscription_expires_at": "2026-08-05T00:00:00.000Z"
 }
 ```
+
+---
+
+## Glossary
+
+Keep brand names and domain terms consistent across languages by pointing
+`sync_translations` at a glossary file in your repo (`glossary_file`). The glossary
+stays in your project (version-controlled); the relevant terms for each target
+language are sent inline with that language's request and applied server-side —
+nothing is stored on the server.
+
+A term with a **blank target** for a language is skipped, never machine-filled, so
+you can list a term for review before a native target is confirmed.
+
+Two formats are auto-detected:
+
+**CSV** — columns `source_term`, `language`, `target_term` (any other columns are
+ignored; an optional `case_sensitive` column of `yes`/`true` is honored). Use `ALL`
+in `language` for a term that applies to every target language:
+
+```csv
+source_term,language,target_term
+PIN,ALL,PIN
+Token,ALL,Token
+Token,ru,токен
+Quote,de,Kurs
+```
+
+**JSON** — a `doNotTranslate` list (kept verbatim, case-sensitive, in every language)
+plus `terms` (per-language `targets`; `strategy: "keep-english"` also keeps the source
+verbatim where no target is given):
+
+```json
+{
+  "doNotTranslate": [{ "term": "OPINDEX", "aliases": ["Opindex"] }, { "term": "PIN" }],
+  "terms": [
+    { "source": "Token", "strategy": "keep-english", "targets": { "ru": "токен" } },
+    { "source": "Quote", "strategy": "translate", "targets": { "de": "Kurs", "es": "cotización" } }
+  ]
+}
+```
+
+An exact-language target always overrides an all-languages "keep" for the same term
+(so `Token` stays `Token` in German but becomes `токен` in Russian).
 
 ---
 
@@ -490,9 +508,8 @@ Check your current credit balance and whether an unlimited subscription is activ
 ### Glossary & Account
 
 ```
-"Always translate 'Wallet' as 'Кошелёк' in Russian"
-"List my glossary terms for German"
-"Remove that glossary term"
+"Sync German and French using the glossary at src/i18n/glossary/glossary.csv"
+"Translate to Russian, keeping the terms in my glossary.json"
 "How many credits do I have left?"
 ```
 

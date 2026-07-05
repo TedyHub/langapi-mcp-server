@@ -8,11 +8,6 @@ import type {
   TranslateFileRequest,
   TranslateFileResponse,
   AccountStatusResult,
-  AddGlossaryTermRequest,
-  GlossaryTermDto,
-  GlossaryListResult,
-  GlossaryAddResult,
-  GlossaryDeleteResult,
 } from "./types.js";
 
 /**
@@ -296,39 +291,5 @@ export class LangAPIClient {
       }
       return { networkError: { code: "NETWORK_ERROR", message: error instanceof Error ? error.message : "Unknown network error" } };
     }
-  }
-
-  /** List glossary terms, optionally filtered to one language pair. */
-  async listGlossary(sourceLang?: string, targetLang?: string): Promise<GlossaryListResult> {
-    const path =
-      sourceLang && targetLang
-        ? `/api/v1/glossary/${encodeURIComponent(sourceLang)}/${encodeURIComponent(targetLang)}`
-        : `/api/v1/glossary?limit=500`;
-    const result = await this.authedJson("GET", path);
-    if ("networkError" in result) return { success: false, error: result.networkError };
-    if (!result.ok) return { success: false, error: LangAPIClient.errorFrom(result.status, result.data) };
-
-    const obj = typeof result.data === "object" && result.data !== null ? (result.data as Record<string, unknown>) : {};
-    if (Array.isArray(obj.data)) return { success: true, data: obj.data as GlossaryTermDto[] };
-    return { success: false, error: { code: "INVALID_RESPONSE", message: "API returned an unexpected response format" } };
-  }
-
-  /** Create a glossary term. */
-  async addGlossaryTerm(term: AddGlossaryTermRequest): Promise<GlossaryAddResult> {
-    const result = await this.authedJson("POST", "/api/v1/glossary", term);
-    if ("networkError" in result) return { success: false, error: result.networkError };
-    if (!result.ok) return { success: false, error: LangAPIClient.errorFrom(result.status, result.data) };
-
-    const obj = typeof result.data === "object" && result.data !== null ? (result.data as Record<string, unknown>) : {};
-    if (typeof obj.data === "object" && obj.data !== null) return { success: true, data: obj.data as GlossaryTermDto };
-    return { success: false, error: { code: "INVALID_RESPONSE", message: "API returned an unexpected response format" } };
-  }
-
-  /** Delete a glossary term by id. */
-  async deleteGlossaryTerm(id: string): Promise<GlossaryDeleteResult> {
-    const result = await this.authedJson("DELETE", `/api/v1/glossary/${encodeURIComponent(id)}`);
-    if ("networkError" in result) return { success: false, error: result.networkError };
-    if (!result.ok) return { success: false, error: LangAPIClient.errorFrom(result.status, result.data) };
-    return { success: true };
   }
 }

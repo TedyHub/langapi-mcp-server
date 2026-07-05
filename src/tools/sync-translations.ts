@@ -21,6 +21,7 @@ import {
 } from "../utils/apple-common.js";
 import { LangAPIClient } from "../api/client.js";
 import { delay } from "../utils/delay.js";
+import { loadGlossary, glossaryTermsForLanguage, type Glossary } from "../utils/glossary.js";
 import { hasAnyCredentials } from "../auth/token-provider.js";
 import {
   languageCodeSchema,
@@ -58,6 +59,12 @@ const SyncTranslationsSchema = z.object({
     .boolean()
     .default(true)
     .describe("If true, write translated content back to local files"),
+  glossary_file: z
+    .string()
+    .optional()
+    .describe(
+      "Path to a glossary file (CSV with source_term/language/target_term columns, or structured JSON with doNotTranslate + terms). Terms relevant to each target language are attached to that language's request so brand names and domain terms translate consistently. Unverified languages are left untouched."
+    ),
 });
 
 export type SyncTranslationsInput = z.infer<typeof SyncTranslationsSchema>;
@@ -211,6 +218,23 @@ export function registerSyncTranslations(server: McpServer): void {
         });
       }
 
+      // Load the project glossary once (if provided). Failing to read/parse it
+      // is a hard error — silently translating without it would defeat the point.
+      let glossary: Glossary | undefined;
+      if (input.glossary_file) {
+        try {
+          glossary = await loadGlossary(resolve(input.glossary_file));
+        } catch (err) {
+          return textResult({
+            success: false,
+            error: {
+              code: "GLOSSARY_ERROR",
+              message: `Could not read glossary file '${input.glossary_file}': ${err instanceof Error ? err.message : String(err)}`,
+            },
+          });
+        }
+      }
+
       const detection = await detectLocales(projectPath, false);
       const sourceLocale = detection.locales.find((l) => l.lang === input.source_lang);
       if (!sourceLocale) {
@@ -266,12 +290,15 @@ export function registerSyncTranslations(server: McpServer): void {
           if (!isFirstCall) await delay(300);
           isFirstCall = false;
 
+          const glossaryTerms = glossary ? glossaryTermsForLanguage(glossary, targetLang) : undefined;
+
           const response = await client.translateFile({
             source_lang: input.source_lang,
             target_lang: targetLang,
             file_format: fileFormat,
             source_file_content: sourceFileContent,
             previous_target_file_content: previousTargetFileContent,
+            glossary: glossaryTerms && glossaryTerms.length ? glossaryTerms : undefined,
             dry_run: input.dry_run,
           });
 

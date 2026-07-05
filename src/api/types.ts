@@ -12,12 +12,20 @@ export interface KeyValue {
   value: string;
 }
 
+/** A glossary term sent inline for one target language (server applies, never stores). */
+export interface GlossaryTerm {
+  source_text: string;
+  target_text: string;
+  case_sensitive?: boolean;
+}
+
 export interface TranslateFileRequest {
   source_lang: string;
   target_lang: string;
   file_format: FileFormat;
   source_file_content: string;
   previous_target_file_content?: string;
+  glossary?: GlossaryTerm[];
   dry_run: boolean;
 }
 
@@ -81,33 +89,4 @@ export interface AccountStatusResponse {
 
 export type AccountStatusResult =
   | AccountStatusResponse
-  | { success: false; error: { code: string; message: string } };
-
-export interface GlossaryTermDto {
-  _id: string;
-  sourceLang: string;
-  sourceText: string;
-  targetLang: string;
-  targetText: string;
-  caseSensitive: boolean;
-}
-
-export interface AddGlossaryTermRequest {
-  sourceLang: string;
-  sourceText: string;
-  targetLang: string;
-  targetText: string;
-  caseSensitive?: boolean;
-}
-
-export type GlossaryListResult =
-  | { success: true; data: GlossaryTermDto[] }
-  | { success: false; error: { code: string; message: string } };
-
-export type GlossaryAddResult =
-  | { success: true; data: GlossaryTermDto }
-  | { success: false; error: { code: string; message: string } };
-
-export type GlossaryDeleteResult =
-  | { success: true }
   | { success: false; error: { code: string; message: string } };
