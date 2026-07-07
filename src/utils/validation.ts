@@ -6,10 +6,11 @@ import { z } from "zod";
 import { resolve, relative, isAbsolute } from "path";
 
 /**
- * RFC 5646 language code pattern
- * Matches: en, de, fr, pt-BR, zh-CN, etc.
+ * BCP 47 language code pattern. Matches a 2–3 letter language subtag plus an
+ * optional region (`-BR`, `-CN`) OR script (`-Hant`, `-Hans`) subtag.
+ * Examples: en, de, fr, pt-BR, zh-CN, zh-Hant, zh-Hans.
  */
-export const LANGUAGE_CODE_PATTERN = /^[a-z]{2,3}(-[A-Z]{2})?$/;
+export const LANGUAGE_CODE_PATTERN = /^[a-z]{2,3}(-([A-Z]{2}|[A-Z][a-z]{3}))?$/;
 
 /**
  * Zod schema for language code validation
@@ -17,10 +18,10 @@ export const LANGUAGE_CODE_PATTERN = /^[a-z]{2,3}(-[A-Z]{2})?$/;
 export const languageCodeSchema = z
   .string()
   .min(2)
-  .max(6)
+  .max(8) // allows a 4-letter script subtag, e.g. "zh-Hant"
   .regex(LANGUAGE_CODE_PATTERN, {
     message:
-      "Invalid language code. Expected format: 'en', 'de', 'pt-BR', etc.",
+      "Invalid language code. Expected format: 'en', 'de', 'pt-BR', 'zh-Hant', etc.",
   });
 
 /**

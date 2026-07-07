@@ -179,6 +179,8 @@ export const COMMON_LANGUAGE_CODES = [
   "pt-PT",
   "zh-CN",
   "zh-TW",
+  "zh-Hans",
+  "zh-Hant",
   "es-ES",
   "es-MX",
   "fr-FR",
@@ -196,6 +198,6 @@ export function isLikelyLanguageCode(str: string): boolean {
   if (COMMON_LANGUAGE_CODES.includes(str)) {
     return true;
   }
-  // Check pattern: 2 lowercase letters, optionally followed by - and more
-  return /^[a-z]{2}(-[A-Z]{2})?$/.test(str);
+  // Check pattern: 2-3 lowercase letters + optional region (-BR) or script (-Hant).
+  return /^[a-z]{2,3}(-([A-Z]{2}|[A-Z][a-z]{3}))?$/.test(str);
 }
