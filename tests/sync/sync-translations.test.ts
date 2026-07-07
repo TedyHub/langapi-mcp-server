@@ -16,9 +16,14 @@ import { mockTranslateFileFetch } from "../mocks/api-client.mock.js";
 
 vi.mock("../../src/config/env.js", () => ({
   API_BASE_URL: "https://mock.langapi.io",
-  getApiKey: () => "mock-api-key",
-  isApiKeyConfigured: () => true,
-  getMaskedApiKey: () => "mock-***",
+}));
+
+// Simulate a logged-in session so the tool's auth gate passes and the client
+// gets a bearer token, without touching a real ~/.langapi/credentials.json.
+vi.mock("../../src/auth/token-provider.js", () => ({
+  hasAnyCredentials: () => true,
+  getAuthToken: async () => "mock-token",
+  forceRefreshAuthToken: async () => null,
 }));
 
 vi.mock("../../src/utils/delay.js", () => ({

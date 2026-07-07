@@ -51,31 +51,30 @@ function isTranslateFileResponse(data: unknown): data is TranslateFileResponse {
 }
 
 export class LangAPIClient {
-  private apiKey: string;
+  private token: string;
   private baseUrl: string;
   private timeoutMs: number;
 
   constructor(
-    apiKey: string,
+    token: string,
     baseUrl: string = API_BASE_URL,
     timeoutMs: number = DEFAULT_TIMEOUT_MS
   ) {
-    this.apiKey = apiKey;
+    this.token = token;
     this.baseUrl = baseUrl;
     this.timeoutMs = timeoutMs;
   }
 
   /**
-   * Create a client instance, resolving a bearer token from either the
-   * static LANGAPI_API_KEY env var or a browser-login session (auto-
-   * refreshed if needed).
-   * @throws Error if no credentials are configured at all
+   * Create a client instance, resolving a bearer token from the
+   * browser/device-login session (auto-refreshed if needed).
+   * @throws Error if not logged in
    */
   static async create(): Promise<LangAPIClient> {
     const token = await getAuthToken();
     if (!token) {
       throw new Error(
-        "Not authenticated. Run `npx @langapi/mcp-server login`, or set the LANGAPI_API_KEY environment variable for CI."
+        "Not authenticated. Run `npx @langapi/mcp-server login` to sign in."
       );
     }
     return new LangAPIClient(token);
@@ -102,12 +101,12 @@ export class LangAPIClient {
     // server reports TOKEN_EXPIRED, refresh the session once, persist the
     // rotated credentials, and retry the original request exactly once. We
     // retry only on that explicit signal and only when a refresh actually
-    // yields a new token (a static API key or a missing refresh token returns
-    // null, so we surface the auth error instead of looping).
+    // yields a new token (a missing refresh token returns null, so we surface
+    // the auth error instead of looping).
     if (first.success === false && first.error.code === "TOKEN_EXPIRED") {
       const newToken = await forceRefreshAuthToken();
       if (newToken) {
-        this.apiKey = newToken;
+        this.token = newToken;
         return this.sendTranslateFile(request);
       }
     }
@@ -125,7 +124,7 @@ export class LangAPIClient {
     if (first.success === false && first.error.code === "TOKEN_EXPIRED") {
       const newToken = await forceRefreshAuthToken();
       if (newToken) {
-        this.apiKey = newToken;
+        this.token = newToken;
         return this.sendGetAccountStatus();
       }
     }
@@ -139,7 +138,7 @@ export class LangAPIClient {
     try {
       const response = await fetch(`${this.baseUrl}/api/v1/account`, {
         method: "GET",
-        headers: { Authorization: `Bearer ${this.apiKey}` },
+        headers: { Authorization: `Bearer ${this.token}` },
         signal: controller.signal,
       });
 
@@ -188,7 +187,7 @@ export class LangAPIClient {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${this.token}`,
         },
         body: JSON.stringify(request),
         signal: controller.signal,
@@ -243,7 +242,7 @@ export class LangAPIClient {
       return await fetch(`${this.baseUrl}${path}`, {
         method,
         headers: {
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${this.token}`,
           ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -279,7 +278,7 @@ export class LangAPIClient {
       if (!res.ok && LangAPIClient.errorFrom(res.status, data).code === "TOKEN_EXPIRED") {
         const newToken = await forceRefreshAuthToken();
         if (newToken) {
-          this.apiKey = newToken;
+          this.token = newToken;
           res = await this.rawFetch(method, path, body);
           data = await res.json().catch(() => ({}));
         }

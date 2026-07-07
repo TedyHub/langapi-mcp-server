@@ -7,12 +7,12 @@ This package enables AI assistants like Claude, Cursor, and VS Code extensions t
 ## Quick Start
 
 ```bash
-# 1. Sign in via your browser (recommended) — opens langapi.io to approve access
+# 1. Sign in — shows a code to enter at langapi.io/device
 npx @langapi/mcp-server login
 
 # 2. Add to your AI tool (example for Claude Desktop on macOS):
 # Edit ~/Library/Application Support/Claude/claude_desktop_config.json
-# No LANGAPI_API_KEY needed — credentials from `login` are picked up automatically.
+# No credentials go in the config — `login` stores them for you.
 
 # 3. Start chatting:
 # "Scan my project for translations"
@@ -22,10 +22,16 @@ npx @langapi/mcp-server login
 
 ## Authentication
 
-Two ways to authenticate, in priority order:
+Sign in once with a browser — there are no API keys to create or paste.
 
-1. **Browser login (recommended for interactive use)** — run `npx @langapi/mcp-server login` once in your terminal. This opens your browser to approve access on langapi.io, then stores a session token at `~/.langapi/credentials.json` (auto-refreshed as needed). Run `npx @langapi/mcp-server logout` to revoke it.
-2. **Static API key (for CI / non-interactive use)** — generate one from your [dashboard](https://langapi.io/dashboard/api-keys) and set it as the `LANGAPI_API_KEY` environment variable. If set, this always takes priority over a browser-login session.
+Run `npx @langapi/mcp-server login`. It prints a short code and a link to
+[langapi.io/device](https://langapi.io/device) (and opens your browser). Sign in,
+enter the code, and approve — the CLI then stores a session token at
+`~/.langapi/credentials.json` and refreshes it automatically. Run
+`npx @langapi/mcp-server logout` to revoke it.
+
+Because sign-in happens in your browser, an interactive terminal is required —
+there is no non-interactive/CI credential.
 
 ## Features
 
@@ -37,7 +43,7 @@ Two ways to authenticate, in priority order:
 - **Server-Side Delta Detection**: The LangAPI backend compares each file against its previous translation and only translates what's new or changed, saving up to 90% on costs — this client never inspects file content itself
 - **Apple Localization**: Support for iOS/macOS `.strings`, `.xcstrings`, and `.stringsdict` files
 - **Glossary**: Keep brand names and domain terms consistent by pointing `sync_translations` at a project glossary file (`glossary_file`)
-- **Account Status**: Check remaining credits and plan from your assistant (`get_account_status`)
+- **Account Status**: Check your plan, monthly word allowance / words remaining, and credit balance from your assistant (`get_account_status`)
 
 ## Installation
 
@@ -69,10 +75,7 @@ npx @langapi/mcp-server
   "mcpServers": {
     "langapi": {
       "command": "npx",
-      "args": ["@langapi/mcp-server"],
-      "env": {
-        "LANGAPI_API_KEY": "your-api-key-here"
-      }
+      "args": ["@langapi/mcp-server"]
     }
   }
 }
@@ -88,10 +91,7 @@ After editing, **restart Claude Desktop** for changes to take effect.
 
 ```bash
 # Add to current project (stored in .mcp.json)
-claude mcp add langapi \
-  --env LANGAPI_API_KEY=your-api-key-here \
-  -- npx -y @langapi/mcp-server
-
+claude mcp add langapi -- npx -y @langapi/mcp-server
 ```
 
 **Option 2: Project-level config** (recommended for teams)
@@ -103,10 +103,7 @@ Create `.mcp.json` in your project root:
   "mcpServers": {
     "langapi": {
       "command": "npx",
-      "args": ["@langapi/mcp-server"],
-      "env": {
-        "LANGAPI_API_KEY": "your-api-key-here"
-      }
+      "args": ["@langapi/mcp-server"]
     }
   }
 }
@@ -121,22 +118,12 @@ Add to `~/.claude.json`:
   "mcpServers": {
     "langapi": {
       "command": "npx",
-      "args": ["@langapi/mcp-server"],
-      "env": {
-        "LANGAPI_API_KEY": "your-api-key-here"
-      }
+      "args": ["@langapi/mcp-server"]
     }
   }
 }
 ```
 
-**Option 4: Environment variable**
-
-```bash
-export LANGAPI_API_KEY="your-api-key-here"
-```
-
-Then the MCP server will pick it up automatically.
 
 **Verify connection:**
 
@@ -169,10 +156,7 @@ claude mcp remove langapi
   "mcpServers": {
     "langapi": {
       "command": "npx",
-      "args": ["@langapi/mcp-server"],
-      "env": {
-        "LANGAPI_API_KEY": "your-api-key-here"
-      }
+      "args": ["@langapi/mcp-server"]
     }
   }
 }
@@ -196,10 +180,7 @@ claude mcp remove langapi
   "mcpServers": {
     "langapi": {
       "command": "npx",
-      "args": ["@langapi/mcp-server"],
-      "env": {
-        "LANGAPI_API_KEY": "your-api-key-here"
-      }
+      "args": ["@langapi/mcp-server"]
     }
   }
 }
@@ -219,10 +200,7 @@ claude mcp remove langapi
   "mcpServers": {
     "langapi": {
       "command": "npx",
-      "args": ["@langapi/mcp-server"],
-      "env": {
-        "LANGAPI_API_KEY": "your-api-key-here"
-      }
+      "args": ["@langapi/mcp-server"]
     }
   }
 }
@@ -241,10 +219,7 @@ claude mcp remove langapi
   "mcpServers": {
     "langapi": {
       "command": "npx",
-      "args": ["@langapi/mcp-server"],
-      "env": {
-        "LANGAPI_API_KEY": "your-api-key-here"
-      }
+      "args": ["@langapi/mcp-server"]
     }
   }
 }
@@ -258,7 +233,6 @@ Restart Windsurf after editing.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `LANGAPI_API_KEY` | No* | Static API key for CI / non-interactive use ([dashboard](https://langapi.io/dashboard/api-keys)). *Not needed if you signed in with `npx @langapi/mcp-server login`. If set, it overrides a browser-login session. |
 | `LANGAPI_API_URL` | No | Custom API URL (default: `https://api.langapi.io`) |
 
 ---
@@ -394,14 +368,18 @@ As of v2, this tool is a thin client: for each source file and target language i
 
 ### `get_account_status`
 
-Check your current credit balance and whether an unlimited subscription is active. Takes no input.
+Check your plan, monthly word allowance and how much of it remains this period, plus your credit balance. Takes no input.
 
 **Output:**
 ```json
 {
   "success": true,
+  "plan": "pro",
+  "monthly_allowance": 50000,
+  "words_used_this_month": 12480,
+  "words_remaining": 37520,
+  "period_reset_at": "2026-08-05T00:00:00.000Z",
   "credits": 910,
-  "plan": "unlimited",
   "unlimited_plan": true,
   "subscription_expires_at": "2026-08-05T00:00:00.000Z"
 }
@@ -560,10 +538,9 @@ The server automatically detects these i18n frameworks:
 - Try running `npx @langapi/mcp-server` manually to test
 - On Windows, you may need to use the full path to npx
 
-### "API key invalid" or "Unauthorized"
-- Verify your API key at [langapi.io/dashboard](https://langapi.io/dashboard)
-- Check for extra spaces or quotes in your config
-- Ensure the key is set in the `env` section, not `args`
+### "Not authenticated" or "Unauthorized"
+- Sign in again with `npx @langapi/mcp-server login`
+- Sessions refresh automatically; logging out or revoking elsewhere requires a fresh login
 
 ### "No locale files found"
 - Check that your locale files match supported patterns (see Frameworks above)
@@ -587,10 +564,6 @@ The server automatically detects these i18n frameworks:
 
 ## Advanced Configuration
 
-### Multiple Projects
-
-Use project-level config files (`.mcp.json`, `.cursor/mcp.json`) with different API keys per project.
-
 ### Custom API URL
 
 For self-hosted or enterprise deployments:
@@ -602,7 +575,6 @@ For self-hosted or enterprise deployments:
       "command": "npx",
       "args": ["@langapi/mcp-server"],
       "env": {
-        "LANGAPI_API_KEY": "your-api-key",
         "LANGAPI_API_URL": "https://your-api-server.com"
       }
     }
@@ -612,14 +584,14 @@ For self-hosted or enterprise deployments:
 
 ---
 
-## Credits & Billing
+## Plans & Billing
 
-- **1 credit = 1 word** to translate (only new or changed strings are billed — unchanged text is reused for free)
-- New users get **1,000 free credits**
-- **Pay as you go:** top up **100,000 credits for $15** — credits never expire
-- **Unlimited plan:** **$19.99/month** for unlimited translations, with no per-word charges
+- **1 word = 1 credit** (only new or changed strings are billed — unchanged text is reused for free)
+- **Free:** **2,000 words/month**, resets monthly. No card required.
+- **Starter:** one-time **$15 → 100,000 credits** that never expire (for a single project).
+- **Pro:** **$24/month** including **50,000 words/month**, then **$2 per extra 10,000 words**.
 
-Manage billing and your subscription at [langapi.io/dashboard/billing](https://langapi.io/dashboard/billing).
+Check your remaining allowance any time with `get_account_status`, and manage billing at [langapi.io/dashboard/billing](https://langapi.io/dashboard/billing). See full details on the [pricing page](https://langapi.io/pricing).
 
 ---
 

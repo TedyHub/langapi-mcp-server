@@ -1,11 +1,10 @@
 /**
- * Resolves the bearer token used for API calls. A static LANGAPI_API_KEY
- * env var (CI / non-interactive use) always takes priority; otherwise the
- * browser-login session token is used, auto-refreshing it when it's
- * expired or close to expiring.
+ * Resolves the bearer token used for API calls. The only credential is the
+ * browser/device-login session token, auto-refreshed when it's expired or
+ * close to expiring.
  */
 
-import { API_BASE_URL, getApiKey } from "../config/env.js";
+import { API_BASE_URL } from "../config/env.js";
 import {
   readCredentials,
   writeCredentials,
@@ -18,7 +17,7 @@ import { isValidTokenResponse } from "./token-response.js";
 const EXPIRY_SAFETY_MARGIN_MS = 60_000;
 
 export function hasAnyCredentials(): boolean {
-  return !!getApiKey() || credentialsFileExists();
+  return credentialsFileExists();
 }
 
 async function refreshAccessToken(creds: StoredCredentials): Promise<StoredCredentials | null> {
@@ -50,9 +49,6 @@ async function refreshAccessToken(creds: StoredCredentials): Promise<StoredCrede
  * Returns null if no credentials are configured at all.
  */
 export async function getAuthToken(): Promise<string | null> {
-  const staticKey = getApiKey();
-  if (staticKey) return staticKey;
-
   const creds = await readCredentials();
   if (!creds) return null;
 
@@ -67,17 +63,13 @@ export async function getAuthToken(): Promise<string | null> {
 /**
  * Force a refresh of the browser-login session token, persisting the rotated
  * credentials, and return the new access token. Returns null when a refresh
- * isn't possible — a static LANGAPI_API_KEY is in use (nothing to refresh),
- * there are no stored credentials, or the refresh request itself failed.
+ * isn't possible — there are no stored credentials, or the refresh request
+ * itself failed.
  *
  * Used by the API client to transparently recover from a mid-request
  * TOKEN_EXPIRED 401 without re-running `create()`.
  */
 export async function forceRefreshAuthToken(): Promise<string | null> {
-  // A static API key can't be refreshed — the caller should surface the
-  // auth error rather than retry.
-  if (getApiKey()) return null;
-
   const creds = await readCredentials();
   if (!creds) return null;
 

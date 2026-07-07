@@ -19,9 +19,6 @@ vi.mock("../../src/auth/token-provider.js", () => ({
 // Keep a stable base URL regardless of the host environment.
 vi.mock("../../src/config/env.js", () => ({
   API_BASE_URL: "https://mock.langapi.io",
-  getApiKey: () => null,
-  isApiKeyConfigured: () => false,
-  getMaskedApiKey: () => null,
 }));
 
 const REQUEST: TranslateFileRequest = {

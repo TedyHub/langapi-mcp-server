@@ -1,6 +1,6 @@
 /**
- * Local storage for browser-login session tokens (~/.langapi/credentials.json).
- * Separate from the LANGAPI_API_KEY env var, which remains the CI/non-interactive path.
+ * Local storage for browser/device-login session tokens
+ * (~/.langapi/credentials.json). This is the only credential the CLI uses.
  */
 
 import { readFile, writeFile, mkdir, rm } from "fs/promises";

@@ -36,7 +36,19 @@ export interface TranslateFileChangeSummary {
   reusedFromCacheCount: number;
 }
 
-export interface TranslateFileCost {
+// Monthly word-allowance fields returned by the metered API, additive to the
+// legacy credit fields. Mirrors langapi-api's UsageCostFields; all optional so
+// an older server (or an older field set) still parses.
+export interface UsageCostFields {
+  plan?: "pro" | "free";
+  monthlyAllowance?: number;
+  wordsUsedThisMonth?: number;
+  wordsRemaining?: number;
+  /** Words beyond the monthly allowance billed as overage (Pro). */
+  overageWords?: number;
+}
+
+export interface TranslateFileCost extends UsageCostFields {
   wordsToTranslate: number;
   creditsRequired: number;
   currentBalance: number;
@@ -55,7 +67,7 @@ export interface TranslateFileExecuteResponse {
   translated_file_content: string;
   delta: TranslateFileChangeSummary;
   qaWarnings?: number;
-  cost: {
+  cost: UsageCostFields & {
     creditsUsed: number;
     balanceAfterSync: number;
     unlimitedPlan?: boolean;
@@ -81,7 +93,14 @@ export interface AccountStatusResponse {
   success: true;
   account: {
     credits: number;
-    plan: "unlimited" | "pay-as-you-go";
+    // 'pro' | 'free' from the metered API; the older two values are accepted for
+    // backward compatibility with a pre-metering server.
+    plan: "pro" | "free" | "unlimited" | "pay-as-you-go";
+    monthlyAllowance?: number;
+    wordsUsedThisMonth?: number;
+    wordsRemaining?: number;
+    /** ISO timestamp when the monthly allowance resets. */
+    periodResetAt?: string;
     unlimitedPlan?: boolean;
     subscriptionExpiresAt?: string;
   };

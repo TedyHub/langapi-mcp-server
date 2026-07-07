@@ -19,7 +19,7 @@ function textResult(payload: unknown): { content: Array<{ type: "text"; text: st
 export function registerGetAccountStatus(server: McpServer): void {
   server.tool(
     "get_account_status",
-    "Get the current LangAPI account status: credit balance and whether an unlimited subscription plan is active. Use this to check remaining credits before syncing translations.",
+    "Get the current LangAPI account status: plan (free/pro), the monthly word allowance and how much of it remains this period, the credit balance, and when the allowance resets. Use this to check remaining words/credits before syncing translations.",
     GetAccountStatusSchema.shape,
     async (): Promise<{ content: Array<{ type: "text"; text: string }> }> => {
       if (!LangAPIClient.canCreate()) {
@@ -28,7 +28,7 @@ export function registerGetAccountStatus(server: McpServer): void {
           error: {
             code: "NOT_AUTHENTICATED",
             message:
-              "Not authenticated. Run `npx @langapi/mcp-server login`, or set LANGAPI_API_KEY for CI.",
+              "Not authenticated. Run `npx @langapi/mcp-server login` to sign in.",
           },
         });
       }
@@ -42,8 +42,12 @@ export function registerGetAccountStatus(server: McpServer): void {
 
       return textResult({
         success: true,
-        credits: result.account.credits,
         plan: result.account.plan,
+        monthly_allowance: result.account.monthlyAllowance ?? null,
+        words_used_this_month: result.account.wordsUsedThisMonth ?? null,
+        words_remaining: result.account.wordsRemaining ?? null,
+        period_reset_at: result.account.periodResetAt ?? null,
+        credits: result.account.credits,
         unlimited_plan: result.account.unlimitedPlan ?? false,
         subscription_expires_at: result.account.subscriptionExpiresAt ?? null,
       });

@@ -92,6 +92,11 @@ interface SyncPreviewOutput {
     current_balance: number;
     balance_after_sync: number;
     unlimited_plan?: boolean;
+    plan?: string;
+    monthly_allowance?: number;
+    words_used_this_month?: number;
+    words_remaining?: number;
+    overage_words?: number;
   };
   per_language: Array<{
     language: string;
@@ -120,6 +125,11 @@ interface SyncExecuteOutput {
     credits_used: number;
     balance_after_sync: number;
     unlimited_plan?: boolean;
+    plan?: string;
+    monthly_allowance?: number;
+    words_used_this_month?: number;
+    words_remaining?: number;
+    overage_words?: number;
   };
   message: string;
 }
@@ -212,8 +222,8 @@ export function registerSyncTranslations(server: McpServer): void {
         return textResult({
           success: false,
           error: {
-            code: "NO_API_KEY",
-            message: "Not authenticated. Run `npx @langapi/mcp-server login`, or set the LANGAPI_API_KEY environment variable for CI.",
+            code: "NOT_AUTHENTICATED",
+            message: "Not authenticated. Run `npx @langapi/mcp-server login` to sign in.",
           },
         });
       }
@@ -253,6 +263,14 @@ export function registerSyncTranslations(server: McpServer): void {
       let currentBalance = 0;
       let unlimitedPlan: boolean | undefined;
       let isFirstCall = true;
+      // Account-level allowance state. plan/monthlyAllowance are constant across
+      // languages; wordsUsed/wordsRemaining evolve as each language consumes, so
+      // the last response holds the final state; overage sums across languages.
+      let planTier: string | undefined;
+      let monthlyAllowance: number | undefined;
+      let wordsUsedThisMonth: number | undefined;
+      let wordsRemaining: number | undefined;
+      let totalOverageWords = 0;
 
       for (const file of sourceLocale.files) {
         const fileFormat = detectFileFormat(file.path);
@@ -321,6 +339,13 @@ export function registerSyncTranslations(server: McpServer): void {
             });
           }
 
+          const cost = response.cost;
+          planTier = cost.plan ?? planTier;
+          monthlyAllowance = cost.monthlyAllowance ?? monthlyAllowance;
+          wordsUsedThisMonth = cost.wordsUsedThisMonth ?? wordsUsedThisMonth;
+          wordsRemaining = cost.wordsRemaining ?? wordsRemaining;
+          totalOverageWords += cost.overageWords ?? 0;
+
           if ("translated_file_content" in response) {
             totalCreditsUsed += response.cost.creditsUsed;
             currentBalance = response.cost.balanceAfterSync;
@@ -380,6 +405,11 @@ export function registerSyncTranslations(server: McpServer): void {
             current_balance: currentBalance,
             balance_after_sync: unlimitedPlan ? currentBalance : currentBalance - totalCreditsUsed,
             unlimited_plan: unlimitedPlan,
+            plan: planTier,
+            monthly_allowance: monthlyAllowance,
+            words_used_this_month: wordsUsedThisMonth,
+            words_remaining: wordsRemaining,
+            overage_words: totalOverageWords || undefined,
           },
           per_language: perLanguageResults.map((r) => ({
             language: r.language,
@@ -410,6 +440,11 @@ export function registerSyncTranslations(server: McpServer): void {
           credits_used: totalCreditsUsed,
           balance_after_sync: currentBalance,
           unlimited_plan: unlimitedPlan,
+          plan: planTier,
+          monthly_allowance: monthlyAllowance,
+          words_used_this_month: wordsUsedThisMonth,
+          words_remaining: wordsRemaining,
+          overage_words: totalOverageWords || undefined,
         },
         message: `Sync complete across ${new Set(perLanguageResults.map((r) => r.language)).size} language(s).`,
       };
